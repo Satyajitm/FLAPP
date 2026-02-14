@@ -179,4 +179,120 @@ void main() {
       await sub.cancel();
     });
   });
+
+  group('MeshChatRepository — self-source filtering', () {
+    late MockTransport transport;
+    late MeshChatRepository repository;
+    final myPeerId = _makePeerId(0xAA);
+
+    setUp(() {
+      transport = MockTransport();
+      repository = MeshChatRepository(
+        transport: transport,
+        myPeerId: myPeerId,
+      );
+    });
+
+    tearDown(() {
+      repository.dispose();
+      transport.dispose();
+    });
+
+    test('filters out packets from own sourceId', () async {
+      // Packet from ourselves (sourceId matches myPeerId 0xAA)
+      final selfPacket = _buildChatPacket('my own msg', senderByte: 0xAA);
+
+      final completer = Completer<ChatMessage>();
+      final sub = repository.onMessageReceived.listen(completer.complete);
+
+      transport.simulateIncomingPacket(selfPacket);
+
+      await Future.delayed(const Duration(milliseconds: 50));
+      expect(completer.isCompleted, isFalse);
+
+      await sub.cancel();
+    });
+
+    test('passes through packets from different sourceId', () async {
+      // Packet from a different peer (0xBB != 0xAA)
+      final remotePacket = _buildChatPacket('hello', senderByte: 0xBB);
+
+      final future = repository.onMessageReceived.first;
+      transport.simulateIncomingPacket(remotePacket);
+
+      final message = await future;
+      expect(message.text, equals('hello'));
+      expect(message.isLocal, isFalse);
+    });
+
+    test('filters self but passes remote in a mixed stream', () async {
+      final messages = <ChatMessage>[];
+      final sub = repository.onMessageReceived.listen(messages.add);
+
+      // Mix of self-sourced and remote packets
+      transport.simulateIncomingPacket(
+          _buildChatPacket('from me', senderByte: 0xAA));
+      transport.simulateIncomingPacket(
+          _buildChatPacket('from peer B', senderByte: 0xBB));
+      transport.simulateIncomingPacket(
+          _buildChatPacket('also from me', senderByte: 0xAA));
+      transport.simulateIncomingPacket(
+          _buildChatPacket('from peer C', senderByte: 0xCC));
+
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      expect(messages, hasLength(2));
+      expect(messages[0].text, equals('from peer B'));
+      expect(messages[1].text, equals('from peer C'));
+
+      await sub.cancel();
+    });
+
+    test('sendMessage still works normally with myPeerId set', () async {
+      final result = await repository.sendMessage(
+        text: 'outgoing',
+        sender: myPeerId,
+      );
+
+      expect(result.text, equals('outgoing'));
+      expect(result.isLocal, isTrue);
+      expect(result.isDelivered, isTrue);
+      expect(transport.broadcastedPackets, hasLength(1));
+    });
+  });
+
+  group('MeshChatRepository — myPeerId=null (backwards compat)', () {
+    late MockTransport transport;
+    late MeshChatRepository repository;
+
+    setUp(() {
+      transport = MockTransport();
+      // No myPeerId — the original constructor signature
+      repository = MeshChatRepository(transport: transport);
+    });
+
+    tearDown(() {
+      repository.dispose();
+      transport.dispose();
+    });
+
+    test('does not filter any packets when myPeerId is null', () async {
+      final messages = <ChatMessage>[];
+      final sub = repository.onMessageReceived.listen(messages.add);
+
+      // Even packets from any sourceId should pass through
+      transport.simulateIncomingPacket(
+          _buildChatPacket('msg1', senderByte: 0xAA));
+      transport.simulateIncomingPacket(
+          _buildChatPacket('msg2', senderByte: 0xBB));
+
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      expect(messages, hasLength(2));
+      expect(messages[0].text, equals('msg1'));
+      expect(messages[1].text, equals('msg2'));
+
+      await sub.cancel();
+    });
+  });
 }

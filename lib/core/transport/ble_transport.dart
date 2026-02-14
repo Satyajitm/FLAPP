@@ -1,15 +1,22 @@
 import 'dart:async';
 import 'dart:typed_data';
+import 'package:ble_peripheral/ble_peripheral.dart' as ble_p;
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import '../mesh/deduplicator.dart';
 import '../protocol/packet.dart';
 import 'transport.dart';
 import 'transport_config.dart';
 
-/// BLE phone-to-phone transport implementation.
+/// BLE phone-to-phone transport with dual-role support.
 ///
-/// Uses flutter_blue_plus for BLE central + peripheral roles.
-/// Implements the abstract [Transport] interface so mesh logic
-/// is decoupled from the radio layer.
+/// **Central role** (flutter_blue_plus): scans for peers advertising the Fluxon
+/// service, connects, subscribes to notifications, writes packets.
+///
+/// **Peripheral role** (ble_peripheral): advertises the Fluxon service UUID,
+/// runs a GATT server, accepts incoming writes from remote centrals.
+///
+/// Both roles run simultaneously so two phones can discover each other
+/// regardless of who starts scanning first.
 class BleTransport extends Transport {
   final TransportConfig config;
   final Uint8List _myPeerId;
@@ -20,19 +27,31 @@ class BleTransport extends Transport {
   final Map<String, PeerConnection> _peerConnections = {};
   final Map<String, BluetoothCharacteristic> _peerCharacteristics = {};
 
+  /// Deduplicator to prevent processing the same packet twice (e.g. received
+  /// via both central notification and peripheral write callback).
+  final MessageDeduplicator _deduplicator;
+
   bool _running = false;
   StreamSubscription? _scanSubscription;
+  Timer? _scanRestartTimer;
 
   /// Fluxon BLE service UUID.
-  static final Guid serviceUuid = Guid('F1DF0001-1234-5678-9ABC-FLUXONLINK01');
+  static const String serviceUuidStr = 'F1DF0001-1234-5678-9ABC-DEF012345678';
+  static final Guid serviceUuid = Guid(serviceUuidStr);
 
   /// Fluxon BLE characteristic UUID for packet exchange.
-  static final Guid packetCharUuid = Guid('F1DF0002-1234-5678-9ABC-FLUXONLINK01');
+  static const String packetCharUuidStr =
+      'F1DF0002-1234-5678-9ABC-DEF012345678';
+  static final Guid packetCharUuid = Guid(packetCharUuidStr);
 
   BleTransport({
     required Uint8List myPeerId,
     this.config = TransportConfig.defaultConfig,
-  }) : _myPeerId = myPeerId;
+  })  : _myPeerId = myPeerId,
+        _deduplicator = MessageDeduplicator(
+          maxAge: const Duration(seconds: 300),
+          maxCount: 1024,
+        );
 
   @override
   Uint8List get myPeerId => _myPeerId;
@@ -46,6 +65,10 @@ class BleTransport extends Transport {
   @override
   Stream<List<PeerConnection>> get connectedPeers => _peersController.stream;
 
+  // ---------------------------------------------------------------------------
+  // Lifecycle
+  // ---------------------------------------------------------------------------
+
   @override
   Future<void> startServices() async {
     if (_running) return;
@@ -56,19 +79,30 @@ class BleTransport extends Transport {
       throw UnsupportedError('BLE is not supported on this device');
     }
 
-    // Start scanning for other Fluxon devices
-    _startScanning();
+    // Start both roles in parallel
+    await Future.wait([
+      _startPeripheral(),
+      _startCentral(),
+    ]);
   }
 
   @override
   Future<void> stopServices() async {
     _running = false;
+    _scanRestartTimer?.cancel();
     await _scanSubscription?.cancel();
     await FlutterBluePlus.stopScan();
 
+    // Stop advertising
+    try {
+      await ble_p.BlePeripheral.stopAdvertising();
+    } catch (_) {}
+
     // Disconnect all peers
     for (final device in _connectedDevices.values) {
-      await device.disconnect();
+      try {
+        await device.disconnect();
+      } catch (_) {}
     }
     _connectedDevices.clear();
     _peerConnections.clear();
@@ -76,37 +110,74 @@ class BleTransport extends Transport {
     _emitPeerUpdate();
   }
 
-  @override
-  Future<bool> sendPacket(FluxonPacket packet, Uint8List peerId) async {
-    final peerHex = peerId.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-    final char = _peerCharacteristics[peerHex];
-    if (char == null) return false;
+  // ---------------------------------------------------------------------------
+  // Peripheral role (ble_peripheral) — GATT server + advertising
+  // ---------------------------------------------------------------------------
 
-    try {
-      await char.write(packet.encodeWithSignature(), withoutResponse: true);
-      return true;
-    } catch (_) {
-      return false;
-    }
+  Future<void> _startPeripheral() async {
+    // Request BLE permissions (BLUETOOTH_CONNECT, BLUETOOTH_ADVERTISE)
+    // before attempting to open a GATT server — required on Android 12+.
+    await ble_p.BlePeripheral.askBlePermission();
+
+    // Initialize the peripheral manager
+    await ble_p.BlePeripheral.initialize();
+
+    // Handle incoming writes from remote centrals
+    ble_p.BlePeripheral.setWriteRequestCallback(
+      (deviceId, characteristicId, offset, value) {
+        if (value != null) {
+          _handleIncomingData(Uint8List.fromList(value));
+        }
+        return null;
+      },
+    );
+
+    // Add our GATT service with a writable+notifiable characteristic
+    await ble_p.BlePeripheral.addService(
+      ble_p.BleService(
+        uuid: serviceUuidStr,
+        primary: true,
+        characteristics: [
+          ble_p.BleCharacteristic(
+            uuid: packetCharUuidStr,
+            properties: [
+              ble_p.CharacteristicProperties.write.index,
+              ble_p.CharacteristicProperties.writeWithoutResponse.index,
+              ble_p.CharacteristicProperties.notify.index,
+              ble_p.CharacteristicProperties.read.index,
+            ],
+            permissions: [
+              ble_p.AttributePermissions.readable.index,
+              ble_p.AttributePermissions.writeable.index,
+            ],
+          ),
+        ],
+      ),
+    );
+
+    // Start advertising our service UUID so other phones discover us
+    await ble_p.BlePeripheral.startAdvertising(
+      services: [serviceUuidStr],
+      localName: 'Fluxon',
+    );
   }
 
-  @override
-  Future<void> broadcastPacket(FluxonPacket packet) async {
-    final data = packet.encodeWithSignature();
-    for (final entry in _peerCharacteristics.entries) {
-      try {
-        await entry.value.write(data, withoutResponse: true);
-      } catch (_) {
-        // Best-effort broadcast; skip failed peers
-      }
-    }
+  // ---------------------------------------------------------------------------
+  // Central role (flutter_blue_plus) — scanning + connecting
+  // ---------------------------------------------------------------------------
+
+  Future<void> _startCentral() async {
+    // Wait until the Bluetooth adapter is on before scanning.
+    await FlutterBluePlus.adapterState
+        .where((s) => s == BluetoothAdapterState.on)
+        .first;
+    _startScanning();
   }
 
   void _startScanning() {
     FlutterBluePlus.startScan(
       withServices: [serviceUuid],
       timeout: Duration(milliseconds: config.scanIntervalMs),
-      continuousUpdates: true,
     );
 
     _scanSubscription = FlutterBluePlus.scanResults.listen((results) {
@@ -114,6 +185,19 @@ class BleTransport extends Transport {
         _handleDiscoveredDevice(result);
       }
     });
+
+    // Restart scan periodically since it times out
+    _scanRestartTimer?.cancel();
+    _scanRestartTimer = Timer.periodic(
+      Duration(milliseconds: config.scanIntervalMs + 500),
+      (_) {
+        if (!_running) return;
+        FlutterBluePlus.startScan(
+          withServices: [serviceUuid],
+          timeout: Duration(milliseconds: config.scanIntervalMs),
+        );
+      },
+    );
   }
 
   Future<void> _handleDiscoveredDevice(ScanResult result) async {
@@ -127,7 +211,7 @@ class BleTransport extends Transport {
       );
       _connectedDevices[deviceId] = result.device;
 
-      // Set up notification for incoming packets and cache characteristic
+      // Discover the Fluxon GATT service and characteristic
       final services = await result.device.discoverServices();
       final service = services.where((s) => s.uuid == serviceUuid).firstOrNull;
       if (service != null) {
@@ -136,6 +220,7 @@ class BleTransport extends Transport {
             .firstOrNull;
         if (char != null) {
           _peerCharacteristics[deviceId] = char;
+          // Subscribe to notifications (receive data from this peer)
           await char.setNotifyValue(true);
           char.onValueReceived.listen((data) {
             _handleIncomingData(Uint8List.fromList(data));
@@ -143,9 +228,7 @@ class BleTransport extends Transport {
         }
       }
 
-      // Track peer connection with a placeholder peer ID.
-      // The real cryptographic peer ID will be populated after a
-      // Noise handshake reveals the remote static public key.
+      // Track peer connection
       _peerConnections[deviceId] = PeerConnection(
         peerId: Uint8List(32), // placeholder until Noise handshake
         rssi: result.rssi,
@@ -166,11 +249,61 @@ class BleTransport extends Transport {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Send / broadcast
+  // ---------------------------------------------------------------------------
+
+  @override
+  Future<bool> sendPacket(FluxonPacket packet, Uint8List peerId) async {
+    final peerHex =
+        peerId.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    final char = _peerCharacteristics[peerHex];
+    if (char == null) return false;
+
+    try {
+      await char.write(packet.encodeWithSignature(), withoutResponse: true);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  @override
+  Future<void> broadcastPacket(FluxonPacket packet) async {
+    final data = packet.encodeWithSignature();
+
+    // Send via central connections (write to peers' characteristics)
+    for (final entry in _peerCharacteristics.entries) {
+      try {
+        await entry.value.write(data, withoutResponse: true);
+      } catch (_) {
+        // Best-effort broadcast; skip failed peers
+      }
+    }
+
+    // Also notify via peripheral (GATT server) to any connected centrals
+    try {
+      await ble_p.BlePeripheral.updateCharacteristic(
+        characteristicId: packetCharUuidStr,
+        value: data,
+      );
+    } catch (_) {
+      // Best-effort; no connected centrals yet
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Incoming data handling (shared by both roles)
+  // ---------------------------------------------------------------------------
+
   void _handleIncomingData(Uint8List data) {
     final packet = FluxonPacket.decode(data);
-    if (packet != null) {
-      _packetController.add(packet);
-    }
+    if (packet == null) return;
+
+    // Deduplicate: skip if we already processed this packet
+    if (_deduplicator.isDuplicate(packet.packetId)) return;
+
+    _packetController.add(packet);
   }
 
   void _emitPeerUpdate() {

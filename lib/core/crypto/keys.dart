@@ -136,4 +136,6 @@ class KeyManager {
       _keyStorage.getOrCreateStaticKeyPair();
 
   Future<void> deleteStaticKeyPair() => _keyStorage.deleteStaticKeyPair();
+
+  Uint8List derivePeerId(Uint8List publicKey) => KeyGenerator.derivePeerId(publicKey);
 }

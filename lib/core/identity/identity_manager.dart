@@ -23,7 +23,7 @@ class IdentityManager {
     final keyPair = await _keyManager.getOrCreateStaticKeyPair();
     _staticPrivateKey = keyPair.privateKey;
     _staticPublicKey = keyPair.publicKey;
-    _myPeerId = PeerId(KeyManager.derivePeerId(_staticPublicKey!));
+    _myPeerId = PeerId(_keyManager.derivePeerId(_staticPublicKey!));
   }
 
   /// This device's peer ID.

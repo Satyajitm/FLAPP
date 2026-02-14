@@ -14,12 +14,14 @@ import 'chat_repository.dart';
 /// [ChatMessage] objects. Sending follows the reverse path.
 class MeshChatRepository implements ChatRepository {
   final Transport _transport;
+  final PeerId? _myPeerId;
   final StreamController<ChatMessage> _messageController =
       StreamController<ChatMessage>.broadcast();
   StreamSubscription? _packetSub;
 
-  MeshChatRepository({required Transport transport})
-      : _transport = transport {
+  MeshChatRepository({required Transport transport, PeerId? myPeerId})
+      : _transport = transport,
+        _myPeerId = myPeerId {
     _listenForMessages();
   }
 
@@ -30,8 +32,12 @@ class MeshChatRepository implements ChatRepository {
   }
 
   void _handleIncomingPacket(FluxonPacket packet) {
-    final text = BinaryProtocol.decodeChatPayload(packet.payload);
     final sender = PeerId(packet.sourceId);
+
+    // Skip packets we sent ourselves (already added optimistically by controller)
+    if (_myPeerId != null && sender == _myPeerId) return;
+
+    final text = BinaryProtocol.decodeChatPayload(packet.payload);
 
     final message = ChatMessage(
       id: packet.packetId,

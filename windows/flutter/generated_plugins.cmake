@@ -3,6 +3,7 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
+  ble_peripheral
   flutter_secure_storage_windows
   geolocator_windows
   sodium_libs

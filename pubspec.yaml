@@ -12,8 +12,11 @@ dependencies:
 
   cupertino_icons: ^1.0.8
 
-  # BLE scanning, advertising, connections
+  # BLE scanning, connecting (central role)
   flutter_blue_plus: ^1.35.2
+
+  # BLE advertising, GATT server (peripheral role)
+  ble_peripheral: ^2.4.0
 
   # Cryptography (libsodium bindings)
   sodium_libs: ^2.2.1
@@ -38,6 +41,7 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  mocktail: ^1.0.4
 
 flutter:
   uses-material-design: true

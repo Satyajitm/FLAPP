@@ -43,7 +43,11 @@ final transportConfigProvider = Provider<TransportConfig>((ref) {
 /// Provides the [ChatRepository] implementation.
 final chatRepositoryProvider = Provider<ChatRepository>((ref) {
   final transport = ref.watch(transportProvider);
-  final repository = MeshChatRepository(transport: transport);
+  final myPeerId = ref.watch(myPeerIdProvider);
+  final repository = MeshChatRepository(
+    transport: transport,
+    myPeerId: myPeerId,
+  );
   ref.onDispose(() => repository.dispose());
   return repository;
 });
