@@ -1,19 +1,37 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../location/location_providers.dart';
 import 'emergency_controller.dart';
+import 'emergency_providers.dart';
 
 /// SOS trigger UI.
-class EmergencyScreen extends StatefulWidget {
+class EmergencyScreen extends ConsumerStatefulWidget {
   const EmergencyScreen({super.key});
 
   @override
-  State<EmergencyScreen> createState() => _EmergencyScreenState();
+  ConsumerState<EmergencyScreen> createState() => _EmergencyScreenState();
 }
 
-class _EmergencyScreenState extends State<EmergencyScreen> {
+class _EmergencyScreenState extends ConsumerState<EmergencyScreen> {
   bool _isConfirming = false;
+
+  Future<void> _sendSos(EmergencyAlertType type) async {
+    setState(() => _isConfirming = false);
+    final locationState = ref.read(locationControllerProvider);
+    final lat = locationState.myLocation?.latitude ?? 0.0;
+    final lng = locationState.myLocation?.longitude ?? 0.0;
+    await ref.read(emergencyControllerProvider.notifier).sendAlert(
+      type: type,
+      latitude: lat,
+      longitude: lng,
+      message: lat == 0.0 && lng == 0.0 ? 'Location unavailable' : '',
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
+    final emergencyState = ref.watch(emergencyControllerProvider);
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Emergency'),
@@ -25,14 +43,17 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
         child: Column(
           children: [
             const Spacer(),
-            if (!_isConfirming)
+            if (emergencyState.isSending)
+              const CircularProgressIndicator()
+            else if (!_isConfirming)
               _buildSOSButton()
             else
               _buildConfirmation(),
             const SizedBox(height: 32),
             _buildAlertTypeGrid(),
             const Spacer(),
-            // TODO: Show recent alerts list
+            if (emergencyState.alerts.isNotEmpty)
+              _buildRecentAlerts(emergencyState.alerts),
           ],
         ),
       ),
@@ -106,10 +127,7 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
                 backgroundColor: Colors.red,
                 foregroundColor: Colors.white,
               ),
-              onPressed: () {
-                setState(() => _isConfirming = false);
-                // TODO: Send SOS via EmergencyController
-              },
+              onPressed: () => _sendSos(EmergencyAlertType.sos),
               child: const Text('SEND SOS'),
             ),
           ],
@@ -140,6 +158,43 @@ class _EmergencyScreenState extends State<EmergencyScreen> {
         const SizedBox(height: 4),
         Text(label, style: const TextStyle(fontSize: 12)),
       ],
+    );
+  }
+
+  Widget _buildRecentAlerts(List<EmergencyAlert> alerts) {
+    return Expanded(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Recent Alerts',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: ListView.builder(
+              itemCount: alerts.length,
+              itemBuilder: (context, index) {
+                final alert = alerts[alerts.length - 1 - index];
+                return ListTile(
+                  leading: Icon(
+                    Icons.warning,
+                    color: alert.isLocal ? Colors.red : Colors.orange,
+                  ),
+                  title: Text(alert.type.name.toUpperCase()),
+                  subtitle: Text(
+                    alert.isLocal ? 'Sent by you' : 'From nearby peer',
+                  ),
+                  trailing: Text(
+                    '${alert.timestamp.hour}:${alert.timestamp.minute.toString().padLeft(2, '0')}',
+                    style: const TextStyle(color: Colors.grey),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

@@ -10,6 +10,10 @@ import 'package:mocktail/mocktail.dart';
 class MockKeyManager extends Mock implements KeyManager {}
 
 void main() {
+  setUpAll(() {
+    registerFallbackValue(Uint8List(0));
+  });
+
   late IdentityManager identityManager;
   late MockKeyManager mockKeyManager;
 
@@ -58,6 +62,8 @@ void main() {
     test('resetIdentity clears keys and trust', () async {
       when(() => mockKeyManager.getOrCreateStaticKeyPair())
           .thenAnswer((_) async => testKeyPair);
+      when(() => mockKeyManager.derivePeerId(any()))
+          .thenReturn(Uint8List(32));
       when(() => mockKeyManager.deleteStaticKeyPair())
           .thenAnswer((_) async {});
 

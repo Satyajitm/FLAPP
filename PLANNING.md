@@ -1,6 +1,6 @@
 # FluxonApp — Development Planning Document
 
-> **Status:** Phase 1 in progress — BLE dual-role transport running on physical device, permissions resolved, 134 unit tests passing, release APK built.
+> **Status:** Phase 1.5 complete — all wiring gaps bridged (sodium init, group persistence, screen→controller wiring, group encryption for chat+emergency), 181 unit tests passing, zero compile errors. Phase 1 field test with two phones still pending.
 > **Last updated:** February 2026
 > **Reference:** See `Technical/Phone_to_Phone_Mesh_Analysis.md` for the full Bitchat analysis this is based on.
 
@@ -423,7 +423,84 @@ android.permission.FOREGROUND_SERVICE       (for background mesh relay)
 **Known constraints:**
 - BLE MTU is ~512 bytes; chat messages longer than ~430 bytes need fragmentation (deferred to Phase 2)
 - No encryption in Phase 1 — messages are plaintext on the wire
-- Peer identity (the `shortId` shown in chat bubbles) is a randomly generated 32-byte ID per session — not persistent across restarts yet
+- ~~Peer identity (the `shortId` shown in chat bubbles) is a randomly generated 32-byte ID per session — not persistent across restarts yet~~ → Fixed in Phase 1.5
+
+---
+
+### Phase 1.5 — Wiring Gaps & Group Infrastructure ✅ Complete
+
+**Goal:** Bridge all scaffolded-but-disconnected wiring in the app so that screens, controllers, repositories, and crypto actually work end-to-end. Fix pre-existing compile errors in the sodium API layer.
+
+**What was implemented:**
+
+#### Sodium API fixes (pre-existing bugs)
+- [x] Created `lib/core/crypto/sodium_instance.dart` — global `late final SodiumSumo sodiumInstance` set once at startup via `initSodium()`. Uses `SodiumSumoInit.init()` (not `SodiumInit`) to get the sumo build, which is required for raw X25519 scalar multiplication (`crypto_scalarmult`) used by the Noise protocol. The previous code used `SodiumInit.sodium` which does not exist in `sodium_libs` 2.2.1+6
+- [x] Updated 4 files to use `sodiumInstance` instead of `SodiumInit.sodium`: `keys.dart`, `group_cipher.dart`, `signatures.dart`, `noise_protocol.dart`
+- [x] Fixed `group_cipher.dart`: `sodium.crypto.aead.chacha20Poly1305Ietf` → `sodium.crypto.aead` (the named getter doesn't exist in sodium 2.x; the deprecated default is xchacha20poly1305ietf)
+- [x] Fixed `group_cipher.dart`: `pwhash()` returns `SecureKey` not `Uint8List` — added `.extractBytes()` call
+- [x] Fixed `keys.dart`: removed duplicate `derivePeerId` method (was declared as both static and instance — Dart doesn't allow this)
+- [x] Fixed `noise_protocol.dart`: `sodium.crypto.aead.chacha20Poly1305Ietf` → `sodium.crypto.aeadChaCha20Poly1305` (same pattern as group_cipher.dart — the sub-getter doesn't exist on `Aead`)
+- [x] Fixed `noise_protocol.dart`: `sodium.crypto.auth.hmacSha256(...)` → `sodium.crypto.auth(...)` (the `Auth` class uses `call()` not `hmacSha256()` — provides HMAC-SHA512-256 which is functionally equivalent for internal HKDF)
+- [x] Fixed `noise_protocol.dart`: `sodium.crypto.scalarmult(...)` → now works via `SodiumSumo` (scalar multiplication is a sumo-only API). Added `.extractBytes()` since `Scalarmult.call()` returns `SecureKey` not `Uint8List`
+- [x] Removed unused import `package:sodium_libs/sodium_libs.dart` from `keys.dart` (now uses `sodiumInstance` from `sodium_instance.dart` only)
+- [x] Removed unused `_generatedPassphrase` field from `CreateGroupScreen`
+- [x] Removed unused `chat_controller.dart` import from `chat_screen.dart`
+
+#### `main.dart` overhaul
+- [x] `void main()` → `Future<void> main() async` with `WidgetsFlutterBinding.ensureInitialized()`
+- [x] `await initSodium()` — proper sodium initialization before anything touches crypto
+- [x] `IdentityManager` initialized — generates persistent Curve25519 keypair, derives `PeerId` from SHA-256 of public key. Peer identity now survives app restarts
+- [x] `GroupManager` initialized with `await groupManager.initialize()` — restores persisted group on startup
+- [x] `groupManagerProvider` override added to `ProviderScope` (was throwing `UnimplementedError`)
+- [x] Replaced random `dart:math` peer ID with `identityManager.myPeerId` — identity is now cryptographically derived
+
+#### Group persistence (new)
+- [x] Created `lib/core/identity/group_storage.dart` — persists group passphrase, name, and createdAt in `FlutterSecureStorage` (modeled on `KeyStorage` in `keys.dart`)
+- [x] Modified `lib/core/identity/group_manager.dart` — injected `GroupStorage`, added `initialize()` method that restores saved group on startup, `createGroup()`/`joinGroup()` fire-and-forget saves, `leaveGroup()` deletes
+
+#### Group encryption for Chat & Emergency
+- [x] Modified `lib/features/chat/data/mesh_chat_repository.dart` — added `GroupManager` dependency, encrypts outgoing chat payload with `encryptForGroup()` when in a group, decrypts incoming with `decryptFromGroup()` (drops if decrypt fails = wrong group key)
+- [x] Modified `lib/features/chat/chat_providers.dart` — injects `groupManagerProvider` into `MeshChatRepository`
+- [x] Modified `lib/features/emergency/data/mesh_emergency_repository.dart` — same encryption pattern as chat. Note: emergency was also unencrypted despite CLAUDE.md claims
+- [x] Created `lib/features/emergency/emergency_providers.dart` — defines `emergencyRepositoryProvider` and `emergencyControllerProvider` (previously missing entirely)
+
+#### Screen → Riverpod controller wiring
+- [x] `LocationScreen` — converted to `ConsumerStatefulWidget`, removed local `_memberLocations` and `_isBroadcasting` state, now reads from `locationControllerProvider`. Broadcast toggle wired to `controller.startBroadcasting()`/`stopBroadcasting()`
+- [x] `EmergencyScreen` — converted to `ConsumerStatefulWidget`, SOS button wired to `emergencyControllerProvider.notifier.sendAlert()`, reads GPS from `locationControllerProvider`, shows `state.alerts` list and `state.isSending` indicator
+- [x] `CreateGroupScreen` — converted to `ConsumerStatefulWidget`, calls `ref.read(groupManagerProvider).createGroup(passphrase, groupName: name)` instead of returning passphrase via `Navigator.pop()`
+- [x] `JoinGroupScreen` — converted to `ConsumerStatefulWidget`, calls `ref.read(groupManagerProvider).joinGroup(passphrase)` instead of returning passphrase via `Navigator.pop()`
+
+#### Tests
+- [x] Created `test/core/group_storage_test.dart` — 5 tests (save/load round-trip, delete, overwrite, partial data returns null) using `FakeSecureStorage`
+- [x] Fixed `test/core/identity_manager_test.dart` — added `registerFallbackValue(Uint8List(0))` for mocktail, added `derivePeerId` stub to `resetIdentity` test (pre-existing bugs exposed by fixing the duplicate method in `keys.dart`)
+- [x] Fixed `test/widget_test.dart` — added `groupManagerProvider.overrideWithValue(GroupManager())` to `ProviderScope` overrides
+- [x] Test suite: **181 tests passing** (expanded from 134). Zero compile errors (`flutter analyze` clean)
+
+#### Files changed summary
+
+| Action | File |
+|--------|------|
+| **Created** | `lib/core/crypto/sodium_instance.dart` |
+| **Created** | `lib/core/identity/group_storage.dart` |
+| **Created** | `lib/features/emergency/emergency_providers.dart` |
+| **Created** | `test/core/group_storage_test.dart` |
+| Modified | `lib/main.dart` |
+| Modified | `lib/core/crypto/keys.dart` |
+| Modified | `lib/core/crypto/signatures.dart` |
+| Modified | `lib/core/crypto/noise_protocol.dart` |
+| Modified | `lib/core/identity/group_cipher.dart` |
+| Modified | `lib/core/identity/group_manager.dart` |
+| Modified | `lib/features/chat/data/mesh_chat_repository.dart` |
+| Modified | `lib/features/chat/chat_providers.dart` |
+| Modified | `lib/features/emergency/data/mesh_emergency_repository.dart` |
+| Modified | `lib/features/emergency/emergency_screen.dart` |
+| Modified | `lib/features/location/location_screen.dart` |
+| Modified | `lib/features/group/create_group_screen.dart` |
+| Modified | `lib/features/chat/chat_screen.dart` |
+| Modified | `lib/features/group/create_group_screen.dart` |
+| Modified | `lib/features/group/join_group_screen.dart` |
+| Modified | `test/core/identity_manager_test.dart` |
+| Modified | `test/widget_test.dart` |
 
 ---
 
@@ -446,21 +523,22 @@ android.permission.FOREGROUND_SERVICE       (for background mesh relay)
 **Goal:** Messages are end-to-end encrypted. Eavesdroppers with BLE sniffers see only ciphertext.
 
 **What needs building:**
-- [ ] `SodiumInit.init()` called in `main.dart` before transport starts (currently a TODO)
-- [ ] `keys.dart` — generate persistent Curve25519 + Ed25519 keypairs, store in `flutter_secure_storage`, derive `PeerId` as SHA-256 of static public key
-- [ ] `noise_protocol.dart` — Noise XX handshake (`Noise_XX_25519_ChaChaPoly_SHA256`) triggered on peer connect
-- [ ] `noise_session.dart` — per-peer session state (send/receive cipher states after handshake)
-- [ ] `signatures.dart` — Ed25519 detached signature on every outgoing packet; verify on every incoming packet
-- [ ] Chat messages encrypted via Noise session (currently plaintext)
-- [ ] `group_manager.dart` — passphrase → Argon2id → 32-byte group key; group key encrypts `locationUpdate` and `emergencyAlert` payloads
-- [ ] Create/join group screens wired to `GroupManager`
+- [x] `SodiumInit.init()` called in `main.dart` before transport starts *(done in Phase 1.5 — `initSodium()` in `sodium_instance.dart`)*
+- [x] `keys.dart` — generate persistent Curve25519 + Ed25519 keypairs, store in `flutter_secure_storage`, derive `PeerId` as SHA-256 of static public key *(code existed, sodium API bugs fixed in Phase 1.5)*
+- [ ] `noise_protocol.dart` — Noise XX handshake (`Noise_XX_25519_ChaChaPoly_SHA256`) triggered on peer connect *(code exists but not wired into BleTransport yet)*
+- [ ] `noise_session.dart` — per-peer session state (send/receive cipher states after handshake) *(code exists but not wired)*
+- [ ] `signatures.dart` — Ed25519 detached signature on every outgoing packet; verify on every incoming packet *(code exists but not wired)*
+- [ ] Chat messages encrypted via Noise session (currently group-encrypted, not per-peer Noise-encrypted)
+- [x] `group_manager.dart` — passphrase → Argon2id → 32-byte group key; group key encrypts `locationUpdate`, `emergencyAlert`, **and `chat`** payloads *(done in Phase 1.5)*
+- [x] Create/join group screens wired to `GroupManager` *(done in Phase 1.5)*
 - [ ] Field test: two phones with the same group passphrase can read location + SOS; a third phone (different passphrase) cannot
 
 ---
 
 ### Phase 4 — Polish, Persistence & Background
 
-- [ ] Persist identity across restarts (`IdentityManager` stores keypairs permanently in `flutter_secure_storage`)
+- [x] Persist identity across restarts (`IdentityManager` stores keypairs permanently in `flutter_secure_storage`) *(done in Phase 1.5 — `IdentityManager.initialize()` called in `main.dart`)*
+- [x] Persist group membership across restarts (`GroupStorage` in `flutter_secure_storage`) *(done in Phase 1.5)*
 - [ ] Android foreground service for background mesh relay
 - [ ] iOS background modes (`bluetooth-central`, `bluetooth-peripheral`) in `Info.plist`
 - [ ] Battery optimisation: duty-cycle BLE scan (5s on / 10s off when idle)

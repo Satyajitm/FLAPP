@@ -1,36 +1,40 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:latlong2/latlong.dart';
-import 'location_model.dart';
+import 'location_providers.dart';
 
 /// Map view showing group members' locations.
-class LocationScreen extends StatefulWidget {
+class LocationScreen extends ConsumerStatefulWidget {
   const LocationScreen({super.key});
 
   @override
-  State<LocationScreen> createState() => _LocationScreenState();
+  ConsumerState<LocationScreen> createState() => _LocationScreenState();
 }
 
-class _LocationScreenState extends State<LocationScreen> {
+class _LocationScreenState extends ConsumerState<LocationScreen> {
   final _mapController = MapController();
-
-  // TODO: Wire up to LocationController via Riverpod
-  final Map<String, LocationUpdate> _memberLocations = {};
-  bool _isBroadcasting = false;
 
   @override
   Widget build(BuildContext context) {
+    final locationState = ref.watch(locationControllerProvider);
+    final isBroadcasting = locationState.isBroadcasting;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Group Map'),
         actions: [
           IconButton(
             icon: Icon(
-              _isBroadcasting ? Icons.location_on : Icons.location_off,
+              isBroadcasting ? Icons.location_on : Icons.location_off,
             ),
             onPressed: () {
-              setState(() => _isBroadcasting = !_isBroadcasting);
-              // TODO: Toggle location broadcasting
+              final controller = ref.read(locationControllerProvider.notifier);
+              if (isBroadcasting) {
+                controller.stopBroadcasting();
+              } else {
+                controller.startBroadcasting();
+              }
             },
           ),
         ],
@@ -59,7 +63,8 @@ class _LocationScreenState extends State<LocationScreen> {
   }
 
   List<Marker> _buildMarkers() {
-    return _memberLocations.values.map((loc) {
+    final memberLocations = ref.watch(locationControllerProvider).memberLocations;
+    return memberLocations.values.map((loc) {
       return Marker(
         point: LatLng(loc.latitude, loc.longitude),
         width: 40,
@@ -74,6 +79,9 @@ class _LocationScreenState extends State<LocationScreen> {
   }
 
   void _centerOnMe() {
-    // TODO: Center map on local device's location
+    final myLoc = ref.read(locationControllerProvider).myLocation;
+    if (myLoc != null) {
+      _mapController.move(LatLng(myLoc.latitude, myLoc.longitude), 15);
+    }
   }
 }

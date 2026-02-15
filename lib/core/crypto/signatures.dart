@@ -1,11 +1,12 @@
 import 'dart:typed_data';
 import 'package:sodium_libs/sodium_libs.dart';
+import 'sodium_instance.dart';
 
 /// Ed25519 packet signing and verification.
 class Signatures {
   /// Generate an Ed25519 signing key pair.
   static ({Uint8List privateKey, Uint8List publicKey}) generateSigningKeyPair() {
-    final sodium = SodiumInit.sodium;
+    final sodium = sodiumInstance;
     final keyPair = sodium.crypto.sign.keyPair();
     return (
       privateKey: keyPair.secretKey.extractBytes(),
@@ -17,7 +18,7 @@ class Signatures {
   ///
   /// Returns the 64-byte detached signature.
   static Uint8List sign(Uint8List message, Uint8List privateKey) {
-    final sodium = SodiumInit.sodium;
+    final sodium = sodiumInstance;
     return sodium.crypto.sign.detached(
       message: message,
       secretKey: SecureKey.fromList(sodium, privateKey),
@@ -26,7 +27,7 @@ class Signatures {
 
   /// Verify an Ed25519 detached signature.
   static bool verify(Uint8List message, Uint8List signature, Uint8List publicKey) {
-    final sodium = SodiumInit.sodium;
+    final sodium = sodiumInstance;
     try {
       return sodium.crypto.sign.verifyDetached(
         message: message,

@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'chat_controller.dart';
 import 'chat_providers.dart';
 import 'message_model.dart';
 

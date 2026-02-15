@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:typed_data';
+import '../../../core/identity/group_manager.dart';
 import '../../../core/identity/peer_id.dart';
 import '../../../core/protocol/binary_protocol.dart';
 import '../../../core/protocol/message_types.dart';
@@ -12,16 +14,25 @@ import 'chat_repository.dart';
 /// Listens for incoming [FluxonPacket]s of type [MessageType.chat] on the
 /// [Transport] layer, decodes them via [BinaryProtocol], and exposes clean
 /// [ChatMessage] objects. Sending follows the reverse path.
+///
+/// When the user is in a group, payloads are encrypted/decrypted with the
+/// group key via [GroupManager], matching the pattern in
+/// [MeshLocationRepository].
 class MeshChatRepository implements ChatRepository {
   final Transport _transport;
   final PeerId? _myPeerId;
+  final GroupManager _groupManager;
   final StreamController<ChatMessage> _messageController =
       StreamController<ChatMessage>.broadcast();
   StreamSubscription? _packetSub;
 
-  MeshChatRepository({required Transport transport, PeerId? myPeerId})
-      : _transport = transport,
-        _myPeerId = myPeerId {
+  MeshChatRepository({
+    required Transport transport,
+    PeerId? myPeerId,
+    GroupManager? groupManager,
+  })  : _transport = transport,
+        _myPeerId = myPeerId,
+        _groupManager = groupManager ?? GroupManager() {
     _listenForMessages();
   }
 
@@ -37,7 +48,15 @@ class MeshChatRepository implements ChatRepository {
     // Skip packets we sent ourselves (already added optimistically by controller)
     if (_myPeerId != null && sender == _myPeerId) return;
 
-    final text = BinaryProtocol.decodeChatPayload(packet.payload);
+    // Decrypt with group key if in a group
+    Uint8List payload = packet.payload;
+    if (_groupManager.isInGroup) {
+      final decrypted = _groupManager.decryptFromGroup(payload);
+      if (decrypted == null) return; // Not in our group — drop
+      payload = decrypted;
+    }
+
+    final text = BinaryProtocol.decodeChatPayload(payload);
 
     final message = ChatMessage(
       id: packet.packetId,
@@ -58,7 +77,14 @@ class MeshChatRepository implements ChatRepository {
     required String text,
     required PeerId sender,
   }) async {
-    final payload = BinaryProtocol.encodeChatPayload(text);
+    var payload = BinaryProtocol.encodeChatPayload(text);
+
+    // Encrypt with group key if in a group
+    if (_groupManager.isInGroup) {
+      final encrypted = _groupManager.encryptForGroup(payload);
+      if (encrypted != null) payload = encrypted;
+    }
+
     final packet = BinaryProtocol.buildPacket(
       type: MessageType.chat,
       sourceId: sender.bytes,

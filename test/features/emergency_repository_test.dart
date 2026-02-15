@@ -1,6 +1,10 @@
 import 'dart:async';
 import 'dart:typed_data';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:fluxon_app/core/identity/group_cipher.dart';
+import 'package:fluxon_app/core/identity/group_manager.dart';
+import 'package:fluxon_app/core/identity/group_storage.dart';
 import 'package:fluxon_app/core/identity/peer_id.dart';
 import 'package:fluxon_app/core/protocol/binary_protocol.dart';
 import 'package:fluxon_app/core/protocol/message_types.dart';
@@ -205,4 +209,232 @@ void main() {
       await sub.cancel();
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Group encryption tests
+  // -------------------------------------------------------------------------
+
+  group('MeshEmergencyRepository — group encryption', () {
+    late MockTransport transport;
+    late GroupManager groupManager;
+    late MeshEmergencyRepository repository;
+    final myPeerId = _makePeerId(0xCC);
+
+    setUp(() {
+      transport = MockTransport();
+      groupManager = GroupManager(
+        cipher: _FakeGroupCipher(),
+        groupStorage: GroupStorage(storage: _FakeSecureStorage()),
+      );
+      groupManager.createGroup('sos-pass', groupName: 'SOS Team');
+      repository = MeshEmergencyRepository(
+        transport: transport,
+        myPeerId: myPeerId,
+        config: const TransportConfig(emergencyRebroadcastCount: 1),
+        groupManager: groupManager,
+      );
+    });
+
+    tearDown(() {
+      repository.dispose();
+      transport.dispose();
+    });
+
+    test('sendAlert encrypts payload when in a group', () async {
+      await repository.sendAlert(
+        type: EmergencyAlertType.sos,
+        latitude: 37.0,
+        longitude: -122.0,
+        message: 'encrypted SOS',
+      );
+
+      expect(transport.broadcastedPackets, hasLength(1));
+      final pkt = transport.broadcastedPackets.first;
+
+      // Payload is encrypted — raw decode should fail or give wrong data
+      final decoded = BinaryProtocol.decodeEmergencyPayload(pkt.payload);
+      // With XOR encryption the binary structure is scrambled
+      if (decoded != null) {
+        expect(decoded.message, isNot(equals('encrypted SOS')));
+      }
+    });
+
+    test('incoming encrypted alert is decrypted correctly', () async {
+      // Build an encrypted emergency packet
+      final plainPayload = BinaryProtocol.encodeEmergencyPayload(
+        alertType: EmergencyAlertType.medical.value,
+        latitude: 40.0,
+        longitude: -74.0,
+        message: 'Need medic!',
+      );
+      final encrypted = groupManager.encryptForGroup(plainPayload)!;
+      final packet = BinaryProtocol.buildPacket(
+        type: MessageType.emergencyAlert,
+        sourceId: _makePeerId(0xDD).bytes,
+        payload: encrypted,
+        ttl: FluxonPacket.maxTTL,
+      );
+
+      final future = repository.onAlertReceived.first;
+      transport.simulateIncomingPacket(packet);
+
+      final alert = await future;
+      expect(alert.type, equals(EmergencyAlertType.medical));
+      expect(alert.latitude, closeTo(40.0, 0.001));
+      expect(alert.longitude, closeTo(-74.0, 0.001));
+      expect(alert.message, equals('Need medic!'));
+    });
+
+    test('sendAlert sets sourceId to myPeerId when in a group', () async {
+      await repository.sendAlert(
+        type: EmergencyAlertType.danger,
+        latitude: 0,
+        longitude: 0,
+      );
+
+      final pkt = transport.broadcastedPackets.first;
+      expect(PeerId(pkt.sourceId), equals(myPeerId));
+    });
+  });
+
+  group('MeshEmergencyRepository — no group (encryption bypassed)', () {
+    late MockTransport transport;
+    late GroupManager groupManager;
+    late MeshEmergencyRepository repository;
+    final myPeerId = _makePeerId(0xCC);
+
+    setUp(() {
+      transport = MockTransport();
+      groupManager = GroupManager(
+        cipher: _FakeGroupCipher(),
+        groupStorage: GroupStorage(storage: _FakeSecureStorage()),
+      );
+      // NOT in a group
+      repository = MeshEmergencyRepository(
+        transport: transport,
+        myPeerId: myPeerId,
+        config: const TransportConfig(emergencyRebroadcastCount: 1),
+        groupManager: groupManager,
+      );
+    });
+
+    tearDown(() {
+      repository.dispose();
+      transport.dispose();
+    });
+
+    test('sendAlert sends plaintext when not in a group', () async {
+      await repository.sendAlert(
+        type: EmergencyAlertType.sos,
+        latitude: 51.5,
+        longitude: -0.1,
+        message: 'plain SOS',
+      );
+
+      final pkt = transport.broadcastedPackets.first;
+      final decoded = BinaryProtocol.decodeEmergencyPayload(pkt.payload);
+      expect(decoded, isNotNull);
+      expect(decoded!.message, equals('plain SOS'));
+    });
+
+    test('incoming plaintext alert is received without decryption', () async {
+      final packet = _buildEmergencyPacket(
+        senderByte: 0xDD,
+        message: 'plain alert',
+      );
+
+      final future = repository.onAlertReceived.first;
+      transport.simulateIncomingPacket(packet);
+
+      final alert = await future;
+      expect(alert.message, equals('plain alert'));
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Test doubles for group encryption
+// ---------------------------------------------------------------------------
+
+class _FakeGroupCipher implements GroupCipher {
+  @override
+  Uint8List? encrypt(Uint8List plaintext, Uint8List? groupKey) {
+    if (groupKey == null) return null;
+    final result = Uint8List(plaintext.length);
+    for (var i = 0; i < plaintext.length; i++) {
+      result[i] = plaintext[i] ^ groupKey[i % groupKey.length];
+    }
+    return result;
+  }
+
+  @override
+  Uint8List? decrypt(Uint8List data, Uint8List? groupKey) {
+    return encrypt(data, groupKey);
+  }
+
+  @override
+  Uint8List deriveGroupKey(String passphrase) {
+    final key = Uint8List(32);
+    final bytes = passphrase.codeUnits;
+    for (var i = 0; i < 32; i++) {
+      key[i] = bytes[i % bytes.length] ^ (i * 7);
+    }
+    return key;
+  }
+
+  @override
+  String generateGroupId(String passphrase) {
+    return 'fake-group-${passphrase.hashCode.toRadixString(16)}';
+  }
+}
+
+class _FakeSecureStorage implements FlutterSecureStorage {
+  final Map<String, String> _store = {};
+
+  @override
+  Future<void> write({
+    required String key,
+    required String? value,
+    IOSOptions? iOptions,
+    AndroidOptions? aOptions,
+    LinuxOptions? lOptions,
+    WebOptions? webOptions,
+    MacOsOptions? mOptions,
+    WindowsOptions? wOptions,
+  }) async {
+    if (value != null) {
+      _store[key] = value;
+    } else {
+      _store.remove(key);
+    }
+  }
+
+  @override
+  Future<String?> read({
+    required String key,
+    IOSOptions? iOptions,
+    AndroidOptions? aOptions,
+    LinuxOptions? lOptions,
+    WebOptions? webOptions,
+    MacOsOptions? mOptions,
+    WindowsOptions? wOptions,
+  }) async {
+    return _store[key];
+  }
+
+  @override
+  Future<void> delete({
+    required String key,
+    IOSOptions? iOptions,
+    AndroidOptions? aOptions,
+    LinuxOptions? lOptions,
+    WebOptions? webOptions,
+    MacOsOptions? mOptions,
+    WindowsOptions? wOptions,
+  }) async {
+    _store.remove(key);
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/identity/peer_id.dart';
+import '../../core/providers/group_providers.dart';
 import '../../core/transport/transport.dart';
 import '../../core/transport/transport_config.dart';
 import 'data/chat_repository.dart';
@@ -44,9 +45,11 @@ final transportConfigProvider = Provider<TransportConfig>((ref) {
 final chatRepositoryProvider = Provider<ChatRepository>((ref) {
   final transport = ref.watch(transportProvider);
   final myPeerId = ref.watch(myPeerIdProvider);
+  final groupManager = ref.watch(groupManagerProvider);
   final repository = MeshChatRepository(
     transport: transport,
     myPeerId: myPeerId,
+    groupManager: groupManager,
   );
   ref.onDispose(() => repository.dispose());
   return repository;

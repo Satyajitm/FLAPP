@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:sodium_libs/sodium_libs.dart';
+import 'sodium_instance.dart';
 
 /// Noise Protocol errors.
 enum NoiseError {
@@ -88,8 +89,8 @@ class NoiseCipherState {
     final byteData = ByteData.sublistView(nonceData);
     byteData.setUint64(4, currentNonce, Endian.big);
 
-    final sodium = SodiumInit.sodium;
-    final ciphertext = sodium.crypto.aead.chacha20Poly1305Ietf.encrypt(
+    final sodium = sodiumInstance;
+    final ciphertext = sodium.crypto.aeadChaCha20Poly1305.encrypt(
       message: plaintext,
       nonce: nonceData,
       key: _key!,
@@ -140,9 +141,9 @@ class NoiseCipherState {
     final nonceData = Uint8List(12);
     ByteData.sublistView(nonceData).setUint64(4, decryptionNonce, Endian.big);
 
-    final sodium = SodiumInit.sodium;
+    final sodium = sodiumInstance;
     try {
-      final plaintext = sodium.crypto.aead.chacha20Poly1305Ietf.decrypt(
+      final plaintext = sodium.crypto.aeadChaCha20Poly1305.decrypt(
         cipherText: actualCiphertext,
         nonce: nonceData,
         key: _key!,
@@ -235,7 +236,7 @@ class NoiseSymmetricState {
   void mixKey(Uint8List inputKeyMaterial) {
     final output = _hkdf(_chainingKey, inputKeyMaterial, 2);
     _chainingKey = output[0];
-    final sodium = SodiumInit.sodium;
+    final sodium = sodiumInstance;
     final tempKey = SecureKey.fromList(sodium, output[1]);
     _cipherState.initializeKey(tempKey);
   }
@@ -274,7 +275,7 @@ class NoiseSymmetricState {
   /// Split into two transport cipher states.
   (NoiseCipherState send, NoiseCipherState receive) split({bool useExtractedNonce = true}) {
     final output = _hkdf(_chainingKey, Uint8List(0), 2);
-    final sodium = SodiumInit.sodium;
+    final sodium = sodiumInstance;
     final c1 = NoiseCipherState(useExtractedNonce: useExtractedNonce);
     c1.initializeKey(SecureKey.fromList(sodium, output[0]));
     final c2 = NoiseCipherState(useExtractedNonce: useExtractedNonce);
@@ -290,8 +291,8 @@ class NoiseSymmetricState {
 
   // HKDF using HMAC-SHA256
   List<Uint8List> _hkdf(Uint8List chainingKey, Uint8List inputKeyMaterial, int numOutputs) {
-    final sodium = SodiumInit.sodium;
-    final tempKey = sodium.crypto.auth.hmacSha256(
+    final sodium = sodiumInstance;
+    final tempKey = sodium.crypto.auth(
       message: inputKeyMaterial,
       key: SecureKey.fromList(sodium, chainingKey),
     );
@@ -303,7 +304,7 @@ class NoiseSymmetricState {
       final input = Uint8List(currentOutput.length + 1);
       input.setAll(0, currentOutput);
       input[input.length - 1] = i;
-      currentOutput = sodium.crypto.auth.hmacSha256(
+      currentOutput = sodium.crypto.auth(
         message: input,
         key: SecureKey.fromList(sodium, tempKey),
       );
@@ -314,7 +315,7 @@ class NoiseSymmetricState {
   }
 
   Uint8List _sha256(Uint8List data) {
-    final sodium = SodiumInit.sodium;
+    final sodium = sodiumInstance;
     return sodium.crypto.genericHash(message: data, outLen: 32);
   }
 }
@@ -477,18 +478,18 @@ class NoiseHandshakeState {
   }
 
   void _generateEphemeralKey() {
-    final sodium = SodiumInit.sodium;
+    final sodium = sodiumInstance;
     final keyPair = sodium.crypto.box.keyPair();
     localEphemeralPrivate = keyPair.secretKey.extractBytes();
     localEphemeralPublic = Uint8List.fromList(keyPair.publicKey);
   }
 
   void _performDH(Uint8List privateKey, Uint8List publicKey) {
-    final sodium = SodiumInit.sodium;
+    final sodium = sodiumInstance;
     final sharedSecret = sodium.crypto.scalarmult(
       n: SecureKey.fromList(sodium, privateKey),
       p: publicKey,
     );
-    _symmetricState.mixKey(sharedSecret);
+    _symmetricState.mixKey(sharedSecret.extractBytes());
   }
 }

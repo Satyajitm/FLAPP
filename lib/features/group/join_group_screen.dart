@@ -1,14 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/providers/group_providers.dart';
 
 /// Join group via passphrase screen.
-class JoinGroupScreen extends StatefulWidget {
+class JoinGroupScreen extends ConsumerStatefulWidget {
   const JoinGroupScreen({super.key});
 
   @override
-  State<JoinGroupScreen> createState() => _JoinGroupScreenState();
+  ConsumerState<JoinGroupScreen> createState() => _JoinGroupScreenState();
 }
 
-class _JoinGroupScreenState extends State<JoinGroupScreen> {
+class _JoinGroupScreenState extends ConsumerState<JoinGroupScreen> {
   final _passphraseController = TextEditingController();
   bool _obscurePassphrase = true;
   bool _isJoining = false;
@@ -24,10 +26,8 @@ class _JoinGroupScreenState extends State<JoinGroupScreen> {
     if (passphrase.isEmpty) return;
 
     setState(() => _isJoining = true);
-
-    // TODO: Call groupManager.joinGroup(passphrase)
-    // Then navigate to main app
-    Navigator.of(context).pop(passphrase);
+    ref.read(groupManagerProvider).joinGroup(passphrase);
+    Navigator.of(context).pop();
   }
 
   @override
