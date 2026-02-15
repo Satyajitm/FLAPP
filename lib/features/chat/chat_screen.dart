@@ -58,7 +58,32 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           IconButton(
             icon: const Icon(Icons.people),
             onPressed: () {
-              // TODO: Show connected peers
+              showModalBottomSheet(
+                context: context,
+                builder: (ctx) => SafeArea(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      ListTile(
+                        leading: const Icon(Icons.add),
+                        title: const Text('Create Group'),
+                        onTap: () {
+                          Navigator.of(ctx).pop();
+                          Navigator.of(context).pushNamed('/create-group');
+                        },
+                      ),
+                      ListTile(
+                        leading: const Icon(Icons.login),
+                        title: const Text('Join Group'),
+                        onTap: () {
+                          Navigator.of(ctx).pop();
+                          Navigator.of(context).pushNamed('/join-group');
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              );
             },
           ),
         ],
