@@ -90,6 +90,36 @@ class BinaryProtocol {
     );
   }
 
+  /// Encode a discovery / topology announce payload.
+  ///
+  /// Format: [neighborCount:1][neighbor1:32][neighbor2:32]...
+  /// The sender's peerId is already in the packet header (sourceId),
+  /// so only the neighbor list is encoded in the payload.
+  static Uint8List encodeDiscoveryPayload({
+    required List<Uint8List> neighbors,
+  }) {
+    final buffer = Uint8List(1 + neighbors.length * 32);
+    buffer[0] = neighbors.length;
+    for (var i = 0; i < neighbors.length; i++) {
+      buffer.setRange(1 + i * 32, 1 + (i + 1) * 32, neighbors[i]);
+    }
+    return buffer;
+  }
+
+  /// Decode a discovery / topology announce payload.
+  static DiscoveryPayload? decodeDiscoveryPayload(Uint8List data) {
+    if (data.isEmpty) return null;
+    final neighborCount = data[0];
+    if (data.length < 1 + neighborCount * 32) return null;
+    final neighbors = <Uint8List>[];
+    for (var i = 0; i < neighborCount; i++) {
+      neighbors.add(
+        Uint8List.fromList(data.sublist(1 + i * 32, 1 + (i + 1) * 32)),
+      );
+    }
+    return DiscoveryPayload(neighbors: neighbors);
+  }
+
   /// Build a complete FluxonPacket from components.
   static FluxonPacket buildPacket({
     required MessageType type,
@@ -128,6 +158,13 @@ class LocationPayload {
     required this.speed,
     required this.bearing,
   });
+}
+
+/// Decoded discovery / topology announce payload.
+class DiscoveryPayload {
+  final List<Uint8List> neighbors;
+
+  const DiscoveryPayload({required this.neighbors});
 }
 
 /// Decoded emergency alert payload.

@@ -293,6 +293,14 @@ class BleTransport extends Transport {
       );
       _log('SUCCESS: Connected to $deviceId');
 
+      // Negotiate larger MTU for mesh packets (header 78 + payload + sig 64)
+      try {
+        final mtu = await result.device.requestMtu(512);
+        _log('Negotiated MTU: $mtu for $deviceId');
+      } catch (e) {
+        _log('MTU negotiation failed for $deviceId (using default): $e');
+      }
+
       _log('Discovering services on $deviceId...');
       final services = await result.device.discoverServices();
       _log('Found ${services.length} services on $deviceId');
