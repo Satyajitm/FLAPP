@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:typed_data';
 import 'group_cipher.dart';
+import 'group_storage.dart';
 import 'peer_id.dart';
 
 /// Fluxonlink-specific shared-passphrase group system.
@@ -10,10 +12,14 @@ import 'peer_id.dart';
 /// can see each other's location.
 ///
 /// Encryption logic is delegated to [GroupCipher] (SRP).
+/// Persistence is delegated to [GroupStorage] (SRP).
 class GroupManager {
   final GroupCipher _cipher;
+  final GroupStorage _groupStorage;
 
-  GroupManager({GroupCipher? cipher}) : _cipher = cipher ?? GroupCipher();
+  GroupManager({GroupCipher? cipher, GroupStorage? groupStorage})
+      : _cipher = cipher ?? GroupCipher(),
+        _groupStorage = groupStorage ?? GroupStorage();
 
   /// Active group (null if not in a group).
   FluxonGroup? _activeGroup;
@@ -24,6 +30,24 @@ class GroupManager {
   /// Whether the user is currently in a group.
   bool get isInGroup => _activeGroup != null;
 
+  /// Restore a previously saved group from secure storage.
+  ///
+  /// Call this once at app startup (after SodiumInit.init()).
+  Future<void> initialize() async {
+    final saved = await _groupStorage.loadGroup();
+    if (saved == null) return;
+
+    final groupKey = _cipher.deriveGroupKey(saved.passphrase);
+    final groupId = _cipher.generateGroupId(saved.passphrase);
+    _activeGroup = FluxonGroup(
+      id: groupId,
+      name: saved.name,
+      key: groupKey,
+      members: {},
+      createdAt: saved.createdAt,
+    );
+  }
+
   /// Create a new group with the given passphrase.
   ///
   /// Derives a group key from the passphrase using Argon2id and generates
@@ -31,13 +55,20 @@ class GroupManager {
   FluxonGroup createGroup(String passphrase, {String? groupName}) {
     final groupKey = _cipher.deriveGroupKey(passphrase);
     final groupId = _cipher.generateGroupId(passphrase);
+    final name = groupName ?? 'Fluxon Group';
+    final now = DateTime.now();
 
     _activeGroup = FluxonGroup(
       id: groupId,
-      name: groupName ?? 'Fluxon Group',
+      name: name,
       key: groupKey,
       members: {},
-      createdAt: DateTime.now(),
+      createdAt: now,
+    );
+
+    // Persist — fire-and-forget to keep createGroup synchronous
+    unawaited(
+      _groupStorage.saveGroup(passphrase: passphrase, name: name, createdAt: now),
     );
 
     return _activeGroup!;
@@ -56,6 +87,7 @@ class GroupManager {
   /// Leave the current group.
   void leaveGroup() {
     _activeGroup = null;
+    unawaited(_groupStorage.deleteGroup());
   }
 
   /// Add a discovered member to the active group.

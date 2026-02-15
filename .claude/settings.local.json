@@ -10,7 +10,14 @@
       "mcp__plugin_playwright_playwright__browser_console_messages",
       "Bash(timeout 5 flutter run:*)",
       "Bash(flutter run:*)",
-      "Bash(taskkill:*)"
+      "Bash(taskkill:*)",
+      "Bash(flutter pub:*)",
+      "Bash(flutter analyze:*)",
+      "Bash(flutter build:*)",
+      "mcp__plugin_playwright_playwright__browser_evaluate",
+      "Bash(netstat:*)",
+      "Bash(flutter --version:*)",
+      "Bash(flutter devices:*)"
     ]
   }
 }

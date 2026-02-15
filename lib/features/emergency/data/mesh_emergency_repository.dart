@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:typed_data';
+import '../../../core/identity/group_manager.dart';
 import '../../../core/identity/peer_id.dart';
 import '../../../core/protocol/binary_protocol.dart';
 import '../../../core/protocol/message_types.dart';
@@ -12,10 +13,12 @@ import 'emergency_repository.dart';
 /// Mesh-network implementation of [EmergencyRepository].
 ///
 /// Handles packet encoding/decoding, re-broadcasting, and transport delivery.
+/// When in a group, payloads are encrypted/decrypted with the group key.
 class MeshEmergencyRepository implements EmergencyRepository {
   final Transport _transport;
   final PeerId _myPeerId;
   final TransportConfig _config;
+  final GroupManager _groupManager;
   final StreamController<EmergencyAlert> _alertController =
       StreamController<EmergencyAlert>.broadcast();
   StreamSubscription? _packetSub;
@@ -24,9 +27,11 @@ class MeshEmergencyRepository implements EmergencyRepository {
     required Transport transport,
     required PeerId myPeerId,
     TransportConfig config = TransportConfig.defaultConfig,
+    GroupManager? groupManager,
   })  : _transport = transport,
         _myPeerId = myPeerId,
-        _config = config {
+        _config = config,
+        _groupManager = groupManager ?? GroupManager() {
     _listenForAlerts();
   }
 
@@ -37,7 +42,15 @@ class MeshEmergencyRepository implements EmergencyRepository {
   }
 
   void _handleIncomingAlert(FluxonPacket packet) {
-    final payload = BinaryProtocol.decodeEmergencyPayload(packet.payload);
+    // Decrypt with group key if in a group
+    Uint8List rawPayload = packet.payload;
+    if (_groupManager.isInGroup) {
+      final decrypted = _groupManager.decryptFromGroup(rawPayload);
+      if (decrypted == null) return; // Not in our group — drop
+      rawPayload = decrypted;
+    }
+
+    final payload = BinaryProtocol.decodeEmergencyPayload(rawPayload);
     if (payload == null) return;
 
     final alert = EmergencyAlert(
@@ -65,12 +78,18 @@ class MeshEmergencyRepository implements EmergencyRepository {
     required double longitude,
     String message = '',
   }) async {
-    final payload = BinaryProtocol.encodeEmergencyPayload(
+    var payload = BinaryProtocol.encodeEmergencyPayload(
       alertType: type.value,
       latitude: latitude,
       longitude: longitude,
       message: message,
     );
+
+    // Encrypt with group key if in a group
+    if (_groupManager.isInGroup) {
+      final encrypted = _groupManager.encryptForGroup(payload);
+      if (encrypted != null) payload = encrypted;
+    }
 
     final packet = BinaryProtocol.buildPacket(
       type: MessageType.emergencyAlert,

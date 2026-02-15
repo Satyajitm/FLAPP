@@ -87,6 +87,72 @@ void main() {
       final withoutSig = packet.encode();
       expect(withSig.length, equals(withoutSig.length + 64));
     });
+
+    group('decode signature fallback', () {
+      test('unsigned packet decoded with hasSignature:true returns null', () {
+        // This is the bug that was fixed — unsigned packets are shorter than
+        // the minimum size expected when hasSignature defaults to true.
+        final encoded = packet.encode(); // no signature
+        final decoded = FluxonPacket.decode(encoded, hasSignature: true);
+        expect(decoded, isNull,
+            reason: 'Unsigned packet is too short for hasSignature:true');
+      });
+
+      test('unsigned packet decoded with hasSignature:false succeeds', () {
+        final encoded = packet.encode();
+        final decoded = FluxonPacket.decode(encoded, hasSignature: false);
+        expect(decoded, isNotNull);
+        expect(decoded!.type, equals(MessageType.chat));
+        expect(decoded.ttl, equals(5));
+        expect(decoded.payload, equals(Uint8List.fromList([1, 2, 3, 4, 5])));
+        expect(decoded.signature, isNull);
+      });
+
+      test('signed packet decoded with hasSignature:true succeeds', () {
+        final sig = Uint8List(64)..fillRange(0, 64, 0xCC);
+        final signed = packet.withSignature(sig);
+        final encoded = signed.encodeWithSignature();
+        final decoded = FluxonPacket.decode(encoded, hasSignature: true);
+        expect(decoded, isNotNull);
+        expect(decoded!.type, equals(MessageType.chat));
+        expect(decoded.signature, isNotNull);
+        expect(decoded.signature, equals(sig));
+      });
+
+      test('fallback strategy: try with signature then without', () {
+        // This mirrors _handleIncomingData logic in BleTransport
+        final encoded = packet.encode(); // unsigned
+
+        var decoded = FluxonPacket.decode(encoded, hasSignature: true);
+        decoded ??= FluxonPacket.decode(encoded, hasSignature: false);
+
+        expect(decoded, isNotNull,
+            reason: 'Fallback to hasSignature:false should succeed');
+        expect(decoded!.type, equals(MessageType.chat));
+        expect(decoded.payload, equals(Uint8List.fromList([1, 2, 3, 4, 5])));
+      });
+
+      test('fallback strategy works for signed packets too', () {
+        final sig = Uint8List(64)..fillRange(0, 64, 0xDD);
+        final signed = packet.withSignature(sig);
+        final encoded = signed.encodeWithSignature();
+
+        var decoded = FluxonPacket.decode(encoded, hasSignature: true);
+        decoded ??= FluxonPacket.decode(encoded, hasSignature: false);
+
+        expect(decoded, isNotNull);
+        expect(decoded!.signature, isNotNull);
+        expect(decoded.signature, equals(sig));
+      });
+
+      test('encodeWithSignature without signature returns just header+payload', () {
+        // When signature is null, encodeWithSignature == encode
+        final withSigCall = packet.encodeWithSignature();
+        final encodeCall = packet.encode();
+        expect(withSigCall.length, equals(encodeCall.length));
+        expect(withSigCall, equals(encodeCall));
+      });
+    });
   });
 
   group('MessageType', () {

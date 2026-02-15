@@ -2,7 +2,9 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:fluxon_app/app.dart';
+import 'package:fluxon_app/core/identity/group_manager.dart';
 import 'package:fluxon_app/core/identity/peer_id.dart';
+import 'package:fluxon_app/core/providers/group_providers.dart';
 import 'package:fluxon_app/core/transport/stub_transport.dart';
 import 'package:fluxon_app/features/chat/chat_providers.dart';
 
@@ -16,6 +18,7 @@ void main() {
         overrides: [
           transportProvider.overrideWithValue(transport),
           myPeerIdProvider.overrideWithValue(PeerId(peerIdBytes)),
+          groupManagerProvider.overrideWithValue(GroupManager()),
         ],
         child: const FluxonApp(),
       ),

@@ -1,6 +1,6 @@
 import 'dart:typed_data';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:sodium_libs/sodium_libs.dart';
+import 'sodium_instance.dart';
 
 /// Pure key generation logic — no storage dependencies (ISP).
 class KeyGenerator {
@@ -8,7 +8,7 @@ class KeyGenerator {
   ///
   /// Returns (privateKey, publicKey) as raw 32-byte arrays.
   static ({Uint8List privateKey, Uint8List publicKey}) generateStaticKeyPair() {
-    final sodium = SodiumInit.sodium;
+    final sodium = sodiumInstance;
     final keyPair = sodium.crypto.box.keyPair();
     return (
       privateKey: keyPair.secretKey.extractBytes(),
@@ -18,13 +18,13 @@ class KeyGenerator {
 
   /// Generate a random 32-byte symmetric key (for group encryption).
   static Uint8List generateSymmetricKey() {
-    final sodium = SodiumInit.sodium;
+    final sodium = sodiumInstance;
     return sodium.randombytes.buf(32);
   }
 
   /// Derive a 32-byte peer ID from a public key (SHA-256 hash).
   static Uint8List derivePeerId(Uint8List publicKey) {
-    final sodium = SodiumInit.sodium;
+    final sodium = sodiumInstance;
     return sodium.crypto.genericHash(message: publicKey, outLen: 32);
   }
 
@@ -120,7 +120,7 @@ class KeyManager {
 
   static Uint8List generateSymmetricKey() => KeyGenerator.generateSymmetricKey();
 
-  static Uint8List derivePeerId(Uint8List publicKey) =>
+  Uint8List derivePeerId(Uint8List publicKey) =>
       KeyGenerator.derivePeerId(publicKey);
 
   Future<void> storeStaticKeyPair({
@@ -136,6 +136,4 @@ class KeyManager {
       _keyStorage.getOrCreateStaticKeyPair();
 
   Future<void> deleteStaticKeyPair() => _keyStorage.deleteStaticKeyPair();
-
-  Uint8List derivePeerId(Uint8List publicKey) => KeyGenerator.derivePeerId(publicKey);
 }

@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:sodium_libs/sodium_libs.dart';
+import '../crypto/sodium_instance.dart';
 
 /// Handles symmetric encryption/decryption for group communication.
 ///
@@ -12,13 +13,13 @@ class GroupCipher {
   /// Returns nonce prepended to ciphertext, or null if [groupKey] is null.
   Uint8List? encrypt(Uint8List plaintext, Uint8List? groupKey) {
     if (groupKey == null) return null;
-    final sodium = SodiumInit.sodium;
+    final sodium = sodiumInstance;
 
     final nonce = sodium.randombytes.buf(
-      sodium.crypto.aead.chacha20Poly1305Ietf.nonceBytes,
+      sodium.crypto.aead.nonceBytes,
     );
 
-    final ciphertext = sodium.crypto.aead.chacha20Poly1305Ietf.encrypt(
+    final ciphertext = sodium.crypto.aead.encrypt(
       message: plaintext,
       nonce: nonce,
       key: SecureKey.fromList(sodium, groupKey),
@@ -36,16 +37,16 @@ class GroupCipher {
   /// Expects nonce prepended to ciphertext. Returns null on failure.
   Uint8List? decrypt(Uint8List data, Uint8List? groupKey) {
     if (groupKey == null) return null;
-    final sodium = SodiumInit.sodium;
+    final sodium = sodiumInstance;
 
-    final nonceLen = sodium.crypto.aead.chacha20Poly1305Ietf.nonceBytes;
+    final nonceLen = sodium.crypto.aead.nonceBytes;
     if (data.length < nonceLen) return null;
 
     final nonce = Uint8List.sublistView(data, 0, nonceLen);
     final ciphertext = Uint8List.sublistView(data, nonceLen);
 
     try {
-      return sodium.crypto.aead.chacha20Poly1305Ietf.decrypt(
+      return sodium.crypto.aead.decrypt(
         cipherText: ciphertext,
         nonce: nonce,
         key: SecureKey.fromList(sodium, groupKey),
@@ -57,24 +58,28 @@ class GroupCipher {
 
   /// Derive a 32-byte group key from a passphrase using Argon2id.
   Uint8List deriveGroupKey(String passphrase) {
-    final sodium = SodiumInit.sodium;
+    final sodium = sodiumInstance;
     final salt = sodium.crypto.genericHash(
       message: Uint8List.fromList(utf8.encode('fluxon-group-salt:$passphrase')),
       outLen: sodium.crypto.pwhash.saltBytes,
     );
 
-    return sodium.crypto.pwhash(
+    // ignore: deprecated_member_use
+    final key = sodium.crypto.pwhash(
       outLen: 32,
       password: passphrase.toCharArray(),
       salt: salt,
+      // ignore: deprecated_member_use
       opsLimit: sodium.crypto.pwhash.opsLimitInteractive,
+      // ignore: deprecated_member_use
       memLimit: sodium.crypto.pwhash.memLimitInteractive,
     );
+    return key.extractBytes();
   }
 
   /// Generate a deterministic group ID from the passphrase.
   String generateGroupId(String passphrase) {
-    final sodium = SodiumInit.sodium;
+    final sodium = sodiumInstance;
     final hash = sodium.crypto.genericHash(
       message: Uint8List.fromList(utf8.encode('fluxon-group-id:$passphrase')),
       outLen: 16,

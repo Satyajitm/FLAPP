@@ -1,42 +1,42 @@
 import 'dart:async';
 import 'dart:io' show Platform;
-import 'dart:math';
-import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'app.dart';
-import 'core/identity/peer_id.dart';
+import 'core/crypto/sodium_instance.dart';
+import 'core/identity/group_manager.dart';
+import 'core/identity/identity_manager.dart';
+import 'core/providers/group_providers.dart';
 import 'core/transport/ble_transport.dart';
 import 'core/transport/stub_transport.dart';
 import 'core/transport/transport.dart';
 import 'features/chat/chat_providers.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize sodium_libs before app starts
-  await SodiumInit.init();
-  
-  // Initialize IdentityManager
+  // Initialize sodium_libs before any crypto operations
+  await initSodium();
+
+  // Initialize identity (loads or creates static key pair)
   final identityManager = IdentityManager();
   await identityManager.initialize();
 
-  // Generate a random 32-byte peer ID for this session
-  // TODO: Use identityManager.myPeerId instead of random generation once fully integrated
-  final random = Random.secure();
-  final peerIdBytes = Uint8List.fromList(
-    List.generate(32, (_) => random.nextInt(256)),
-  );
-  final myPeerId = PeerId(peerIdBytes);
+  // Initialize group manager (restores persisted group if any)
+  final groupManager = GroupManager();
+  await groupManager.initialize();
+
+  // Derive peer ID from the identity's public key
+  final myPeerId = identityManager.myPeerId;
+  final myPeerIdBytes = myPeerId.bytes;
 
   // Use BleTransport on Android/iOS, StubTransport elsewhere
   final Transport transport;
   if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
-    transport = BleTransport(myPeerId: peerIdBytes);
-    // TODO: Pass identityManager to BleTransport if needed for auth
+    transport = BleTransport(myPeerId: myPeerIdBytes);
   } else {
-    transport = StubTransport(myPeerId: peerIdBytes);
+    transport = StubTransport(myPeerId: myPeerIdBytes);
   }
 
   // Launch the UI immediately, then start BLE in the background.
@@ -47,7 +47,7 @@ void main() {
       overrides: [
         transportProvider.overrideWithValue(transport),
         myPeerIdProvider.overrideWithValue(myPeerId),
-        // TODO: Add identityManagerProvider
+        groupManagerProvider.overrideWithValue(groupManager),
       ],
       child: const FluxonApp(),
     ),

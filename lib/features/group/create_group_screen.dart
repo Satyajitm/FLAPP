@@ -1,17 +1,18 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/providers/group_providers.dart';
 
 /// Create group + show passphrase screen.
-class CreateGroupScreen extends StatefulWidget {
+class CreateGroupScreen extends ConsumerStatefulWidget {
   const CreateGroupScreen({super.key});
 
   @override
-  State<CreateGroupScreen> createState() => _CreateGroupScreenState();
+  ConsumerState<CreateGroupScreen> createState() => _CreateGroupScreenState();
 }
 
-class _CreateGroupScreenState extends State<CreateGroupScreen> {
+class _CreateGroupScreenState extends ConsumerState<CreateGroupScreen> {
   final _nameController = TextEditingController();
   final _passphraseController = TextEditingController();
-  String? _generatedPassphrase;
   bool _obscurePassphrase = true;
 
   @override
@@ -26,9 +27,11 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
     final passphrase = _passphraseController.text.trim();
     if (passphrase.isEmpty) return;
 
-    // TODO: Call groupManager.createGroup(passphrase, groupName: name)
-    // Then navigate to main app
-    Navigator.of(context).pop(passphrase);
+    ref.read(groupManagerProvider).createGroup(
+      passphrase,
+      groupName: name.isEmpty ? null : name,
+    );
+    Navigator.of(context).pop();
   }
 
   @override

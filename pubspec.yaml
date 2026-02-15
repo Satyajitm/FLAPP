@@ -34,6 +34,9 @@ dependencies:
   # State management
   flutter_riverpod: ^2.6.1
 
+  # Runtime permission requests (location for BLE scanning on Android)
+  permission_handler: ^11.3.0
+
   # Compression
   archive: ^4.0.4
 
