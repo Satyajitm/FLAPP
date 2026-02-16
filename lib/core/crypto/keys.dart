@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'sodium_instance.dart';
+import 'signatures.dart';
 
 /// Pure key generation logic — no storage dependencies (ISP).
 class KeyGenerator {
@@ -47,6 +48,8 @@ class KeyGenerator {
 class KeyStorage {
   static const _staticPrivateKeyTag = 'fluxon_static_private_key';
   static const _staticPublicKeyTag = 'fluxon_static_public_key';
+  static const _signingPrivateKeyTag = 'fluxon_signing_private_key';
+  static const _signingPublicKeyTag = 'fluxon_signing_public_key';
 
   final FlutterSecureStorage _storage;
 
@@ -104,6 +107,60 @@ class KeyStorage {
     await _storage.delete(key: _staticPrivateKeyTag);
     await _storage.delete(key: _staticPublicKeyTag);
   }
+
+  /// Store the Ed25519 signing key pair in secure storage.
+  Future<void> storeSigningKeyPair({
+    required Uint8List privateKey,
+    required Uint8List publicKey,
+  }) async {
+    await _storage.write(
+      key: _signingPrivateKeyTag,
+      value: KeyGenerator.bytesToHex(privateKey),
+    );
+    await _storage.write(
+      key: _signingPublicKeyTag,
+      value: KeyGenerator.bytesToHex(publicKey),
+    );
+  }
+
+  /// Load the Ed25519 signing key pair from secure storage.
+  ///
+  /// Returns null if no key pair is stored.
+  Future<({Uint8List privateKey, Uint8List publicKey})?> loadSigningKeyPair() async {
+    final privateHex = await _storage.read(key: _signingPrivateKeyTag);
+    final publicHex = await _storage.read(key: _signingPublicKeyTag);
+
+    if (privateHex == null || publicHex == null) return null;
+
+    return (
+      privateKey: KeyGenerator.hexToBytes(privateHex),
+      publicKey: KeyGenerator.hexToBytes(publicHex),
+    );
+  }
+
+  /// Get or generate the Ed25519 signing key pair.
+  ///
+  /// If a key pair exists in storage, loads it. Otherwise generates a new one
+  /// and stores it.
+  Future<({Uint8List privateKey, Uint8List publicKey})> getOrCreateSigningKeyPair() async {
+    final existing = await loadSigningKeyPair();
+    if (existing != null) return existing;
+
+    // Import Signatures to use generateSigningKeyPair
+    // This will be available at runtime
+    final keyPair = Signatures.generateSigningKeyPair();
+    await storeSigningKeyPair(
+      privateKey: keyPair.privateKey,
+      publicKey: keyPair.publicKey,
+    );
+    return keyPair;
+  }
+
+  /// Delete stored signing key pair.
+  Future<void> deleteSigningKeyPair() async {
+    await _storage.delete(key: _signingPrivateKeyTag);
+    await _storage.delete(key: _signingPublicKeyTag);
+  }
 }
 
 /// Backward-compatible facade that composes [KeyGenerator] and [KeyStorage].
@@ -136,4 +193,18 @@ class KeyManager {
       _keyStorage.getOrCreateStaticKeyPair();
 
   Future<void> deleteStaticKeyPair() => _keyStorage.deleteStaticKeyPair();
+
+  Future<void> storeSigningKeyPair({
+    required Uint8List privateKey,
+    required Uint8List publicKey,
+  }) =>
+      _keyStorage.storeSigningKeyPair(privateKey: privateKey, publicKey: publicKey);
+
+  Future<({Uint8List privateKey, Uint8List publicKey})?> loadSigningKeyPair() =>
+      _keyStorage.loadSigningKeyPair();
+
+  Future<({Uint8List privateKey, Uint8List publicKey})> getOrCreateSigningKeyPair() =>
+      _keyStorage.getOrCreateSigningKeyPair();
+
+  Future<void> deleteSigningKeyPair() => _keyStorage.deleteSigningKeyPair();
 }

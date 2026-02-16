@@ -1,11 +1,30 @@
 import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:fluxon_app/core/crypto/signatures.dart';
+import 'package:fluxon_app/core/identity/identity_manager.dart';
 import 'package:fluxon_app/core/mesh/mesh_service.dart';
 import 'package:fluxon_app/core/protocol/binary_protocol.dart';
 import 'package:fluxon_app/core/protocol/message_types.dart';
 import 'package:fluxon_app/core/protocol/packet.dart';
 import 'package:fluxon_app/core/transport/stub_transport.dart';
 import 'package:fluxon_app/core/transport/transport.dart';
+import 'package:mocktail/mocktail.dart';
+
+// Mock IdentityManager for testing
+class MockIdentityManager extends Mock implements IdentityManager {
+  final Uint8List _signingPrivateKey = Uint8List.fromList(
+    List.generate(64, (i) => i & 0xFF),
+  );
+  final Uint8List _signingPublicKey = Uint8List.fromList(
+    List.generate(32, (i) => i & 0xFF),
+  );
+
+  @override
+  Uint8List get signingPrivateKey => _signingPrivateKey;
+
+  @override
+  Uint8List get signingPublicKey => _signingPublicKey;
+}
 
 void main() {
   Uint8List makePeerId(int fillByte) =>
@@ -27,14 +46,17 @@ void main() {
 
   late Uint8List myPeerId;
   late StubTransport rawTransport;
+  late MockIdentityManager identityManager;
   late MeshService meshService;
 
   setUp(() async {
     myPeerId = makePeerId(0xAA);
     rawTransport = StubTransport(myPeerId: myPeerId);
+    identityManager = MockIdentityManager();
     meshService = MeshService(
       transport: rawTransport,
       myPeerId: myPeerId,
+      identityManager: identityManager,
     );
     await meshService.start();
   });
@@ -375,7 +397,12 @@ void main() {
     test('startServices delegates to raw transport and starts mesh', () async {
       // Create a fresh pair without calling start()
       final transport2 = StubTransport(myPeerId: myPeerId);
-      final mesh2 = MeshService(transport: transport2, myPeerId: myPeerId);
+      final identityManager2 = MockIdentityManager();
+      final mesh2 = MeshService(
+        transport: transport2,
+        myPeerId: myPeerId,
+        identityManager: identityManager2,
+      );
 
       await mesh2.startServices();
 

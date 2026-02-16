@@ -1,11 +1,29 @@
 import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:fluxon_app/core/identity/identity_manager.dart';
 import 'package:fluxon_app/core/mesh/mesh_service.dart';
 import 'package:fluxon_app/core/protocol/binary_protocol.dart';
 import 'package:fluxon_app/core/protocol/message_types.dart';
 import 'package:fluxon_app/core/protocol/packet.dart';
 import 'package:fluxon_app/core/transport/stub_transport.dart';
 import 'package:fluxon_app/core/transport/transport.dart';
+import 'package:mocktail/mocktail.dart';
+
+// Mock IdentityManager for testing
+class MockIdentityManager extends Mock implements IdentityManager {
+  final Uint8List _signingPrivateKey = Uint8List.fromList(
+    List.generate(64, (i) => i & 0xFF),
+  );
+  final Uint8List _signingPublicKey = Uint8List.fromList(
+    List.generate(32, (i) => i & 0xFF),
+  );
+
+  @override
+  Uint8List get signingPrivateKey => _signingPrivateKey;
+
+  @override
+  Uint8List get signingPublicKey => _signingPublicKey;
+}
 
 /// Simulates a 3-phone linear topology: A — B — C
 ///
@@ -17,6 +35,7 @@ void main() {
 
   late Uint8List peerIdA, peerIdB, peerIdC;
   late StubTransport transportA, transportB, transportC;
+  late MockIdentityManager identityManagerA, identityManagerB, identityManagerC;
   late MeshService meshA, meshB, meshC;
 
   setUp(() async {
@@ -28,9 +47,25 @@ void main() {
     transportB = StubTransport(myPeerId: peerIdB);
     transportC = StubTransport(myPeerId: peerIdC);
 
-    meshA = MeshService(transport: transportA, myPeerId: peerIdA);
-    meshB = MeshService(transport: transportB, myPeerId: peerIdB);
-    meshC = MeshService(transport: transportC, myPeerId: peerIdC);
+    identityManagerA = MockIdentityManager();
+    identityManagerB = MockIdentityManager();
+    identityManagerC = MockIdentityManager();
+
+    meshA = MeshService(
+      transport: transportA,
+      myPeerId: peerIdA,
+      identityManager: identityManagerA,
+    );
+    meshB = MeshService(
+      transport: transportB,
+      myPeerId: peerIdB,
+      identityManager: identityManagerB,
+    );
+    meshC = MeshService(
+      transport: transportC,
+      myPeerId: peerIdC,
+      identityManager: identityManagerC,
+    );
 
     await meshA.start();
     await meshB.start();

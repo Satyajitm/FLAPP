@@ -35,7 +35,10 @@ Future<void> main() async {
   // Use BleTransport on Android/iOS, StubTransport elsewhere
   final Transport rawTransport;
   if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
-    rawTransport = BleTransport(myPeerId: myPeerIdBytes);
+    rawTransport = BleTransport(
+      myPeerId: myPeerIdBytes,
+      identityManager: identityManager,
+    );
   } else {
     rawTransport = StubTransport(myPeerId: myPeerIdBytes);
   }
@@ -44,6 +47,7 @@ Future<void> main() async {
   final transport = MeshService(
     transport: rawTransport,
     myPeerId: myPeerIdBytes,
+    identityManager: identityManager,
   );
 
   // Launch the UI immediately, then start BLE in the background.

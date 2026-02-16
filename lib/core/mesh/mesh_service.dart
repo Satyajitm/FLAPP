@@ -3,6 +3,8 @@ import 'dart:typed_data';
 
 import '../../shared/hex_utils.dart';
 import '../../shared/logger.dart';
+import '../crypto/signatures.dart';
+import '../identity/identity_manager.dart';
 import '../protocol/binary_protocol.dart';
 import '../protocol/message_types.dart';
 import '../protocol/packet.dart';
@@ -27,6 +29,7 @@ class MeshService implements Transport {
   final Transport _rawTransport;
   final Uint8List _myPeerId;
   final TransportConfig _config;
+  final IdentityManager _identityManager;
 
   final TopologyTracker _topology;
   final GossipSyncManager _gossipSync;
@@ -47,11 +50,13 @@ class MeshService implements Transport {
   MeshService({
     required Transport transport,
     required Uint8List myPeerId,
+    required IdentityManager identityManager,
     TransportConfig config = TransportConfig.defaultConfig,
     TopologyTracker? topologyTracker,
     GossipSyncManager? gossipSync,
   })  : _rawTransport = transport,
         _myPeerId = myPeerId,
+        _identityManager = identityManager,
         _config = config,
         _topology = topologyTracker ?? TopologyTracker(),
         _gossipSync = gossipSync ??
@@ -90,12 +95,20 @@ class MeshService implements Transport {
   }
 
   @override
-  Future<bool> sendPacket(FluxonPacket packet, Uint8List peerId) =>
-      _rawTransport.sendPacket(packet, peerId);
+  Future<bool> sendPacket(FluxonPacket packet, Uint8List peerId) async {
+    // Sign the packet before sending
+    final sig = Signatures.sign(packet.encode(), _identityManager.signingPrivateKey);
+    final signedPacket = packet.withSignature(sig);
+    return _rawTransport.sendPacket(signedPacket, peerId);
+  }
 
   @override
-  Future<void> broadcastPacket(FluxonPacket packet) =>
-      _rawTransport.broadcastPacket(packet);
+  Future<void> broadcastPacket(FluxonPacket packet) async {
+    // Sign the packet before broadcasting
+    final sig = Signatures.sign(packet.encode(), _identityManager.signingPrivateKey);
+    final signedPacket = packet.withSignature(sig);
+    await _rawTransport.broadcastPacket(signedPacket);
+  }
 
   /// Expose topology for optional UI / debugging.
   TopologyTracker get topology => _topology;
@@ -152,6 +165,18 @@ class MeshService implements Transport {
   // ---------------------------------------------------------------------------
 
   void _onPacketReceived(FluxonPacket packet) {
+    // TODO: Verify Ed25519 signature when sender's public key is known
+    // (after Noise handshake or via key distribution mechanism).
+    // For now, packets are accepted if signature validation isn't available.
+    if (packet.signature != null) {
+      // Signature is present but we can't verify it yet without the sender's public key.
+      // This will be implemented in Phase 3B when we add key distribution.
+      SecureLogger.debug(
+        'Packet signed but verification deferred (key unknown)',
+        category: _cat,
+      );
+    }
+
     // Feed to gossip sync for gap-filling bookkeeping.
     _gossipSync.onPacketSeen(packet);
 
