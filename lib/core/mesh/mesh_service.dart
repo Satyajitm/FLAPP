@@ -158,8 +158,8 @@ class MeshService implements Transport {
     SecureLogger.info('MeshService stopped', category: _cat);
   }
 
-  void dispose() {
-    stop();
+  Future<void> dispose() async {
+    await stop();
     _appPacketController.close();
   }
 

@@ -4,6 +4,8 @@ import '../../core/identity/peer_id.dart';
 import 'data/chat_repository.dart';
 import 'message_model.dart';
 
+const _sentinel = Object();
+
 /// Chat state management.
 class ChatState {
   final List<ChatMessage> messages;
@@ -19,12 +21,14 @@ class ChatState {
   ChatState copyWith({
     List<ChatMessage>? messages,
     bool? isSending,
-    PeerId? selectedPeer,
+    Object? selectedPeer = _sentinel,
   }) {
     return ChatState(
       messages: messages ?? this.messages,
       isSending: isSending ?? this.isSending,
-      selectedPeer: selectedPeer ?? this.selectedPeer,
+      selectedPeer: selectedPeer == _sentinel
+          ? this.selectedPeer
+          : selectedPeer as PeerId?,
     );
   }
 }

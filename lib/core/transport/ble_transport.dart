@@ -483,10 +483,20 @@ class BleTransport extends Transport {
         packetData = decrypted;
         _log('Decrypted packet from $fromDeviceId');
       } else {
-        // Decryption failed — treat as plaintext broadcast.
-        // Mesh protocols send broadcasts in plaintext for all peers to receive.
-        _log('Decryption failed for $fromDeviceId, treating as plaintext broadcast');
-        // packetData remains as-is (plaintext)
+        // Decryption failed — only allow valid plaintext packets through
+        // (broadcasts and handshakes are sent unencrypted even between
+        // peers with established Noise sessions).
+        final probe = FluxonPacket.decode(data, hasSignature: true) ??
+            FluxonPacket.decode(data, hasSignature: false);
+        if (probe != null) {
+          packetData = data;
+          _log('Decryption failed for $fromDeviceId, valid plaintext packet (type=${probe.type})');
+        } else {
+          // Not a valid plaintext packet either — likely corrupted or
+          // a Noise-encrypted packet that failed decryption. Drop it.
+          _log('Decryption failed for $fromDeviceId, invalid packet, dropping');
+          return;
+        }
       }
     }
 
