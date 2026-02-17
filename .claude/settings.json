@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cmd /c:*)",
+      "mcp__plugin_playwright_playwright__browser_resize"
+    ]
+  }
+}
