@@ -116,11 +116,9 @@ void main() {
         ),
       );
 
-      expect(find.text('Create Group'), findsWidgets);
-      expect(find.text('Create a new Fluxon group'), findsOneWidget);
+      expect(find.text('Create Group'), findsOneWidget);
+      expect(find.text('Create a group'), findsOneWidget);
       expect(find.byType(TextField), findsNWidgets(2));
-      // The button has an add icon
-      expect(find.byIcon(Icons.add), findsOneWidget);
     });
 
     testWidgets('does not create group with empty passphrase', (tester) async {
@@ -133,8 +131,8 @@ void main() {
         ),
       );
 
-      // Tap button via its icon
-      await tester.tap(find.byIcon(Icons.add));
+      // Tap button via its text
+      await tester.tap(find.text('Create Group'));
       await tester.pumpAndSettle();
 
       expect(groupManager.isInGroup, isFalse);
@@ -176,8 +174,8 @@ void main() {
       await tester.enterText(passphraseField, 'my-secret-pass');
       await tester.pumpAndSettle();
 
-      // Tap the create button via its icon
-      await tester.tap(find.byIcon(Icons.add));
+      // Tap the create button via its text
+      await tester.tap(find.text('Create Group'));
       await tester.pumpAndSettle();
 
       expect(groupManager.isInGroup, isTrue);
@@ -218,7 +216,7 @@ void main() {
       await tester.enterText(passphraseField, 'secret123');
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byIcon(Icons.add));
+      await tester.tap(find.text('Create Group'));
       await tester.pumpAndSettle();
 
       expect(groupManager.activeGroup!.name, equals('Trekking Team'));
@@ -236,10 +234,9 @@ void main() {
         ),
       );
 
-      expect(find.text('Join Group'), findsWidgets);
-      expect(find.text('Join an existing group'), findsOneWidget);
+      expect(find.text('Join Group'), findsOneWidget);
+      expect(find.text('Join a group'), findsOneWidget);
       expect(find.byType(TextField), findsOneWidget);
-      expect(find.byIcon(Icons.login), findsOneWidget);
     });
 
     testWidgets('does not join with empty passphrase', (tester) async {
@@ -252,7 +249,7 @@ void main() {
         ),
       );
 
-      await tester.tap(find.byIcon(Icons.login));
+      await tester.tap(find.text('Join Group'));
       await tester.pumpAndSettle();
 
       expect(groupManager.isInGroup, isFalse);
@@ -292,7 +289,7 @@ void main() {
       await tester.enterText(find.byType(TextField), 'shared-secret');
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byIcon(Icons.login));
+      await tester.tap(find.text('Join Group'));
       await tester.pumpAndSettle();
 
       expect(groupManager.isInGroup, isTrue);
@@ -337,7 +334,7 @@ void main() {
       await tester.enterText(find.byType(TextField), 'shared-pass');
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byIcon(Icons.login));
+      await tester.tap(find.text('Join Group'));
       await tester.pumpAndSettle();
 
       expect(groupManager.activeGroup!.key, equals(createdKey));

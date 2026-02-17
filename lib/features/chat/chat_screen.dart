@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../core/identity/peer_id.dart';
+import '../../core/providers/group_providers.dart';
 import 'chat_providers.dart';
 import 'message_model.dart';
 
@@ -30,18 +30,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     ref.read(chatControllerProvider.notifier).sendMessage(text);
   }
 
-  void _showPeerPicker() {
-    showModalBottomSheet(
-      context: context,
-      builder: (ctx) => _PeerPickerSheet(
-        onPeerSelected: (peer) {
-          Navigator.of(ctx).pop();
-          ref.read(chatControllerProvider.notifier).selectPeer(peer);
-        },
-      ),
-    );
-  }
-
   void _scrollToBottom() {
     if (_scrollController.hasClients) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -54,180 +42,323 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
   }
 
+  void _showGroupMenu() {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        final groupManager = ref.read(groupManagerProvider);
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.symmetric(vertical: 12),
+                decoration: BoxDecoration(
+                  color: Colors.grey[300],
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.fromLTRB(20, 4, 20, 12),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Group',
+                    style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.add_circle_outline),
+                title: const Text('Create Group'),
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  Navigator.of(context).pushNamed('/create-group');
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.login_outlined),
+                title: const Text('Join Group'),
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  Navigator.of(context).pushNamed('/join-group');
+                },
+              ),
+              if (groupManager.isInGroup)
+                ListTile(
+                  leading: Icon(Icons.logout_outlined, color: Colors.red[400]),
+                  title: Text('Leave Group', style: TextStyle(color: Colors.red[400])),
+                  onTap: () {
+                    Navigator.of(ctx).pop();
+                    groupManager.leaveGroup();
+                  },
+                ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final chatState = ref.watch(chatControllerProvider);
+    final groupManager = ref.watch(groupManagerProvider);
     final messages = chatState.messages;
 
-    // Auto-scroll when new messages arrive
     if (messages.isNotEmpty) {
       _scrollToBottom();
     }
 
+    final group = groupManager.activeGroup;
+    final memberCount = group?.members.length ?? 0;
+
     return Scaffold(
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       appBar: AppBar(
-        title: const Text('Group Chat'),
+        scrolledUnderElevation: 0,
+        backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+        title: group != null
+            ? Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    group.name,
+                    style: const TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  Text(
+                    memberCount == 0
+                        ? 'Mesh active'
+                        : '$memberCount member${memberCount == 1 ? '' : 's'}',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context).colorScheme.primary,
+                      fontWeight: FontWeight.w400,
+                    ),
+                  ),
+                ],
+              )
+            : const Text(
+                'No Group',
+                style: TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.people),
-            onPressed: () {
-              showModalBottomSheet(
-                context: context,
-                builder: (ctx) => SafeArea(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      ListTile(
-                        leading: const Icon(Icons.add),
-                        title: const Text('Create Group'),
-                        onTap: () {
-                          Navigator.of(ctx).pop();
-                          Navigator.of(context).pushNamed('/create-group');
-                        },
-                      ),
-                      ListTile(
-                        leading: const Icon(Icons.login),
-                        title: const Text('Join Group'),
-                        onTap: () {
-                          Navigator.of(ctx).pop();
-                          Navigator.of(context).pushNamed('/join-group');
-                        },
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            },
+            icon: const Icon(Icons.more_vert),
+            tooltip: 'Group options',
+            onPressed: _showGroupMenu,
           ),
         ],
       ),
       body: Column(
         children: [
           Expanded(
-            child: messages.isEmpty
-                ? const Center(
-                    child: Text(
-                      'No messages yet.\nStart chatting with your group!',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: Colors.grey),
-                    ),
-                  )
-                : ListView.builder(
-                    controller: _scrollController,
-                    padding: const EdgeInsets.all(16),
-                    itemCount: messages.length,
-                    itemBuilder: (context, index) {
-                      final msg = messages[index];
-                      return _MessageBubble(message: msg);
-                    },
-                  ),
+            child: group == null
+                ? _buildNoGroupState(context)
+                : messages.isEmpty
+                    ? _buildEmptyMessagesState(context)
+                    : ListView.builder(
+                        controller: _scrollController,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 12,
+                        ),
+                        itemCount: messages.length,
+                        itemBuilder: (context, index) {
+                          return _MessageBubble(message: messages[index]);
+                        },
+                      ),
           ),
-          _buildInputBar(
-            isSending: chatState.isSending,
-            selectedPeer: chatState.selectedPeer,
-          ),
+          if (group != null) _buildInputBar(isSending: chatState.isSending),
         ],
       ),
     );
   }
 
-  Widget _buildInputBar({
-    required bool isSending,
-    required PeerId? selectedPeer,
-  }) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-      decoration: BoxDecoration(
-        color: Theme.of(context).scaffoldBackgroundColor,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.1),
-            blurRadius: 4,
-            offset: const Offset(0, -1),
-          ),
-        ],
+  Widget _buildNoGroupState(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 40),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 72,
+              height: 72,
+              decoration: BoxDecoration(
+                color: colorScheme.primaryContainer,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                Icons.hub_outlined,
+                size: 36,
+                color: colorScheme.onPrimaryContainer,
+              ),
+            ),
+            const SizedBox(height: 20),
+            Text(
+              'Join your group',
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.w600,
+                color: colorScheme.onSurface,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Create or join a group to start chatting with people nearby.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 14,
+                color: colorScheme.onSurfaceVariant,
+                height: 1.5,
+              ),
+            ),
+            const SizedBox(height: 32),
+            FilledButton.icon(
+              onPressed: () => Navigator.of(context).pushNamed('/create-group'),
+              icon: const Icon(Icons.add, size: 18),
+              label: const Text('Create Group'),
+              style: FilledButton.styleFrom(
+                minimumSize: const Size.fromHeight(48),
+              ),
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: () => Navigator.of(context).pushNamed('/join-group'),
+              icon: const Icon(Icons.login, size: 18),
+              label: const Text('Join Group'),
+              style: OutlinedButton.styleFrom(
+                minimumSize: const Size.fromHeight(48),
+              ),
+            ),
+          ],
+        ),
       ),
+    );
+  }
+
+  Widget _buildEmptyMessagesState(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (selectedPeer != null) _buildPeerSelector(selectedPeer),
-          Row(
-            children: [
-              IconButton(
-                icon: Icon(
-                  Icons.person_add,
-                  color: selectedPeer != null
-                      ? Theme.of(context).colorScheme.primary
-                      : null,
-                ),
-                tooltip: 'Send private message',
-                onPressed: _showPeerPicker,
-              ),
-              Expanded(
-                child: TextField(
-                  controller: _textController,
-                  decoration: InputDecoration(
-                    hintText: selectedPeer != null
-                        ? 'Private message...'
-                        : 'Type a message...',
-                    border: const OutlineInputBorder(),
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 8,
-                    ),
-                  ),
-                  onSubmitted: (_) => _sendMessage(),
-                ),
-              ),
-              const SizedBox(width: 8),
-              IconButton(
-                icon: isSending
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.send),
-                onPressed: isSending ? null : _sendMessage,
-              ),
-            ],
+          Icon(
+            Icons.chat_bubble_outline,
+            size: 48,
+            color: colorScheme.outlineVariant,
+          ),
+          const SizedBox(height: 16),
+          Text(
+            'No messages yet',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w500,
+              color: colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Say hello to your group!',
+            style: TextStyle(
+              fontSize: 14,
+              color: colorScheme.outlineVariant,
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildPeerSelector(PeerId selectedPeer) {
+  Widget _buildInputBar({required bool isSending}) {
+    final colorScheme = Theme.of(context).colorScheme;
     return Container(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Row(
-        children: [
-          Icon(Icons.lock, size: 16, color: Theme.of(context).colorScheme.primary),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              'Private to ${selectedPeer.shortId}',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-                color: Theme.of(context).colorScheme.primary,
+      padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+      decoration: BoxDecoration(
+        color: Theme.of(context).scaffoldBackgroundColor,
+        border: Border(
+          top: BorderSide(color: colorScheme.outlineVariant, width: 0.5),
+        ),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _textController,
+                maxLines: null,
+                textCapitalization: TextCapitalization.sentences,
+                decoration: InputDecoration(
+                  hintText: 'Message group...',
+                  hintStyle: TextStyle(color: colorScheme.onSurfaceVariant),
+                  filled: true,
+                  fillColor: colorScheme.surfaceContainerLowest,
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 10,
+                  ),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(24),
+                    borderSide: BorderSide.none,
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(24),
+                    borderSide: BorderSide(
+                      color: colorScheme.outlineVariant,
+                      width: 0.5,
+                    ),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(24),
+                    borderSide: BorderSide(
+                      color: colorScheme.primary,
+                      width: 1.5,
+                    ),
+                  ),
+                ),
+                onSubmitted: (_) => _sendMessage(),
               ),
-              overflow: TextOverflow.ellipsis,
             ),
-          ),
-          const SizedBox(width: 4),
-          SizedBox(
-            width: 24,
-            height: 24,
-            child: IconButton(
-              padding: EdgeInsets.zero,
-              icon: const Icon(Icons.close, size: 16),
-              onPressed: () {
-                ref.read(chatControllerProvider.notifier).selectPeer(null);
-              },
+            const SizedBox(width: 8),
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 150),
+              child: isSending
+                  ? SizedBox(
+                      key: const ValueKey('loading'),
+                      width: 40,
+                      height: 40,
+                      child: Padding(
+                        padding: const EdgeInsets.all(10),
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: colorScheme.primary,
+                        ),
+                      ),
+                    )
+                  : IconButton(
+                      key: const ValueKey('send'),
+                      icon: const Icon(Icons.send_rounded),
+                      color: colorScheme.primary,
+                      onPressed: _sendMessage,
+                    ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -241,44 +372,66 @@ class _MessageBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isLocal = message.isLocal;
+    final colorScheme = Theme.of(context).colorScheme;
+
     return Align(
       alignment: isLocal ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
-        margin: const EdgeInsets.only(bottom: 8),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.75,
+          maxWidth: MediaQuery.of(context).size.width * 0.72,
         ),
         decoration: BoxDecoration(
           color: isLocal
-              ? Theme.of(context).colorScheme.primary
-              : Theme.of(context).colorScheme.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(12),
+              ? colorScheme.primary
+              : colorScheme.surfaceContainerLow,
+          border: isLocal
+              ? null
+              : Border.all(color: colorScheme.outlineVariant, width: 0.5),
+          borderRadius: BorderRadius.only(
+            topLeft: const Radius.circular(16),
+            topRight: const Radius.circular(16),
+            bottomLeft: isLocal ? const Radius.circular(16) : const Radius.circular(4),
+            bottomRight: isLocal ? const Radius.circular(4) : const Radius.circular(16),
+          ),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             if (!isLocal)
-              Text(
-                message.sender.shortId,
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
-                  color: isLocal ? Colors.white70 : Colors.grey,
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Text(
+                  message.sender.shortId,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    fontFamily: 'monospace',
+                    color: colorScheme.primary,
+                    letterSpacing: 0.3,
+                  ),
                 ),
               ),
             Text(
               message.text,
               style: TextStyle(
-                color: isLocal ? Colors.white : null,
+                fontSize: 15,
+                color: isLocal ? Colors.white : colorScheme.onSurface,
+                height: 1.35,
               ),
             ),
-            const SizedBox(height: 2),
-            Text(
-              _formatTime(message.timestamp),
-              style: TextStyle(
-                fontSize: 10,
-                color: isLocal ? Colors.white54 : Colors.grey,
+            const SizedBox(height: 4),
+            Align(
+              alignment: Alignment.bottomRight,
+              child: Text(
+                _formatTime(message.timestamp),
+                style: TextStyle(
+                  fontSize: 10,
+                  color: isLocal
+                      ? Colors.white.withValues(alpha: 0.65)
+                      : colorScheme.onSurfaceVariant,
+                ),
               ),
             ),
           ],
@@ -289,72 +442,5 @@ class _MessageBubble extends StatelessWidget {
 
   String _formatTime(DateTime dt) {
     return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
-  }
-}
-
-/// Bottom sheet for selecting a peer for private messaging.
-class _PeerPickerSheet extends ConsumerWidget {
-  final Function(PeerId) onPeerSelected;
-
-  const _PeerPickerSheet({required this.onPeerSelected});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final transport = ref.watch(transportProvider);
-    final connectedPeersAsyncValue = ref.watch(
-      StreamProvider((ref) => transport.connectedPeers),
-    );
-
-    return SafeArea(
-      child: SingleChildScrollView(
-        child: connectedPeersAsyncValue.when(
-          data: (peers) {
-            if (peers.isEmpty) {
-              return Padding(
-                padding: const EdgeInsets.all(16),
-                child: Text(
-                  'No connected peers.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: Colors.grey[600]),
-                ),
-              );
-            }
-
-            return Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Text(
-                    'Select a peer for private message',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                ),
-                ...peers.map(
-                  (peer) => ListTile(
-                    leading: const Icon(Icons.person),
-                    title: Text(
-                      PeerId(peer.peerId).shortId,
-                      style: const TextStyle(fontFamily: 'monospace'),
-                    ),
-                    subtitle: Text('RSSI: ${peer.rssi}'),
-                    onTap: () => onPeerSelected(PeerId(peer.peerId)),
-                  ),
-                ),
-                const SizedBox(height: 16),
-              ],
-            );
-          },
-          loading: () => const Padding(
-            padding: EdgeInsets.all(16),
-            child: CircularProgressIndicator(),
-          ),
-          error: (err, stack) => Padding(
-            padding: const EdgeInsets.all(16),
-            child: Text('Error loading peers: $err'),
-          ),
-        ),
-      ),
-    );
   }
 }

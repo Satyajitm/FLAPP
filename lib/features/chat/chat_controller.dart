@@ -4,40 +4,35 @@ import '../../core/identity/peer_id.dart';
 import 'data/chat_repository.dart';
 import 'message_model.dart';
 
-const _sentinel = Object();
-
 /// Chat state management.
 class ChatState {
   final List<ChatMessage> messages;
   final bool isSending;
-  final PeerId? selectedPeer; // null = broadcast mode, non-null = private message mode
 
   const ChatState({
     this.messages = const [],
     this.isSending = false,
-    this.selectedPeer,
   });
 
   ChatState copyWith({
     List<ChatMessage>? messages,
     bool? isSending,
-    Object? selectedPeer = _sentinel,
   }) {
     return ChatState(
       messages: messages ?? this.messages,
       isSending: isSending ?? this.isSending,
-      selectedPeer: selectedPeer == _sentinel
-          ? this.selectedPeer
-          : selectedPeer as PeerId?,
     );
   }
 }
 
-/// Chat controller — manages sending and receiving chat messages.
+/// Chat controller — manages sending and receiving group chat messages.
 ///
 /// All transport, protocol, and encryption details are delegated to the
 /// injected [ChatRepository]. This controller is purely concerned with
 /// application-level state management.
+///
+/// Only group broadcast messages are supported. One-to-one private messaging
+/// is not a feature of FluxonApp.
 class ChatController extends StateNotifier<ChatState> {
   final ChatRepository _repository;
   final PeerId _myPeerId;
@@ -60,25 +55,15 @@ class ChatController extends StateNotifier<ChatState> {
     });
   }
 
-  /// Send a chat message (broadcast to group or private to selected peer).
-  ///
-  /// Routing decision:
-  /// - If [selectedPeer] is null: sends public broadcast message to all group members
-  /// - If [selectedPeer] is non-null: sends private message via Noise session (end-to-end encrypted)
+  /// Send a chat message to all group members.
   Future<void> sendMessage(String text) async {
     state = state.copyWith(isSending: true);
 
     try {
-      final message = state.selectedPeer != null
-          ? await _repository.sendPrivateMessage(
-              text: text,
-              sender: _myPeerId,
-              recipient: state.selectedPeer!,
-            )
-          : await _repository.sendMessage(
-              text: text,
-              sender: _myPeerId,
-            );
+      final message = await _repository.sendMessage(
+        text: text,
+        sender: _myPeerId,
+      );
 
       state = state.copyWith(
         messages: [...state.messages, message],
@@ -87,11 +72,6 @@ class ChatController extends StateNotifier<ChatState> {
     } catch (_) {
       state = state.copyWith(isSending: false);
     }
-  }
-
-  /// Select a peer for private messaging, or null to return to broadcast mode.
-  void selectPeer(PeerId? peer) {
-    state = state.copyWith(selectedPeer: peer);
   }
 
   @override

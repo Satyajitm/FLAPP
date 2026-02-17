@@ -21,11 +21,29 @@ class FluxonApp extends StatelessWidget {
         colorSchemeSeed: const Color(0xFF3D5AFE),
         useMaterial3: true,
         brightness: Brightness.light,
+        appBarTheme: const AppBarTheme(
+          centerTitle: false,
+          elevation: 0,
+          scrolledUnderElevation: 0,
+        ),
+        navigationBarTheme: const NavigationBarThemeData(
+          elevation: 0,
+          labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+        ),
       ),
       darkTheme: ThemeData(
         colorSchemeSeed: const Color(0xFF3D5AFE),
         useMaterial3: true,
         brightness: Brightness.dark,
+        appBarTheme: const AppBarTheme(
+          centerTitle: false,
+          elevation: 0,
+          scrolledUnderElevation: 0,
+        ),
+        navigationBarTheme: const NavigationBarThemeData(
+          elevation: 0,
+          labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+        ),
       ),
       home: const _HomeScreen(),
       routes: {
