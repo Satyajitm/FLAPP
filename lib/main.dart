@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'app.dart';
 import 'core/crypto/sodium_instance.dart';
@@ -9,13 +10,21 @@ import 'core/identity/group_manager.dart';
 import 'core/identity/identity_manager.dart';
 import 'core/providers/group_providers.dart';
 import 'core/mesh/mesh_service.dart';
+import 'core/services/foreground_service_manager.dart';
 import 'core/transport/ble_transport.dart';
 import 'core/transport/stub_transport.dart';
 import 'core/transport/transport.dart';
 import 'features/chat/chat_providers.dart';
 
 Future<void> main() async {
+  // Must be called before anything else for flutter_foreground_task v9.
+  // dart:isolate is not available on web, so guard this call.
+  if (!kIsWeb) FlutterForegroundTask.initCommunicationPort();
+
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Configure the Android foreground service. No-op on iOS/desktop.
+  ForegroundServiceManager.initialize();
 
   // Initialize sodium_libs before any crypto operations
   await initSodium();
@@ -74,8 +83,12 @@ Future<void> main() async {
 Future<void> _startBle(Transport transport) async {
   try {
     await transport.startServices();
+    // BLE is running — start the foreground service to prevent Android
+    // from killing the process when the app is backgrounded.
+    await ForegroundServiceManager.start();
   } catch (_) {
     // BLE failed to start (Bluetooth off, permission denied).
     // BleTransport will retry scanning once the adapter turns on.
+    // Do not start the foreground service if BLE did not start.
   }
 }

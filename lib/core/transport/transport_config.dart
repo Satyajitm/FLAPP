@@ -38,6 +38,17 @@ class TransportConfig {
   /// Emergency alert re-broadcast count.
   final int emergencyRebroadcastCount;
 
+  /// Duration the BLE scan stays ON during idle duty-cycle mode (milliseconds).
+  final int dutyCycleScanOnMs;
+
+  /// Duration the BLE scan stays OFF (paused) during idle duty-cycle mode
+  /// (milliseconds). After this pause, a new ON period begins.
+  final int dutyCycleScanOffMs;
+
+  /// Seconds of inactivity (no packets sent or received) after which the
+  /// transport enters idle duty-cycle scan mode to conserve battery.
+  final int idleThresholdSeconds;
+
   const TransportConfig({
     this.scanIntervalMs = 2000,
     this.advertisingIntervalMs = 1000,
@@ -51,6 +62,9 @@ class TransportConfig {
     this.topologyFreshnessSeconds = 60,
     this.locationBroadcastIntervalSeconds = 10,
     this.emergencyRebroadcastCount = 3,
+    this.dutyCycleScanOnMs = 5000,
+    this.dutyCycleScanOffMs = 10000,
+    this.idleThresholdSeconds = 30,
   });
 
   static const TransportConfig defaultConfig = TransportConfig();

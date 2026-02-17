@@ -19,7 +19,16 @@
       "Bash(flutter --version:*)",
       "Bash(flutter devices:*)",
       "Bash(adb:*)",
-      "Bash(dart analyze:*)"
+      "Bash(dart analyze:*)",
+      "WebFetch(domain:github.com)",
+      "Bash(cmd /c \"taskkill /PID 150208 /F\")",
+      "Bash(cmd /c \"taskkill /PID 251108 /F\")",
+      "Bash(cmd /c \"tasklist /FI \"\"IMAGENAME eq dart.exe\"\"\")",
+      "Bash(cmd /c \"tasklist /FI \"\"IMAGENAME eq flutter.exe\"\"\")",
+      "Bash(powershell -Command:*)",
+      "mcp__plugin_playwright_playwright__browser_snapshot",
+      "mcp__plugin_playwright_playwright__browser_type",
+      "mcp__plugin_playwright_playwright__browser_network_requests"
     ]
   }
 }

@@ -57,6 +57,18 @@ class BleTransport extends Transport {
   StreamSubscription? _scanSubscription;
   Timer? _scanRestartTimer;
 
+  /// Last time a packet was sent or received. Used to detect idle periods.
+  DateTime _lastActivityTimestamp = DateTime.now();
+
+  /// Whether the transport is currently in idle duty-cycle scan mode.
+  bool _isInIdleMode = false;
+
+  /// Fires every second to check whether to switch between active/idle modes.
+  Timer? _idleCheckTimer;
+
+  /// Controls the OFF phase of the duty cycle (pauses between short scans).
+  Timer? _dutyCycleOffTimer;
+
   /// Fluxon BLE service UUID.
   static const String serviceUuidStr = 'F1DF0001-1234-5678-9ABC-DEF012345678';
   static final Guid serviceUuid = Guid(serviceUuidStr);
@@ -130,6 +142,8 @@ class BleTransport extends Transport {
   Future<void> stopServices() async {
     _log('Stopping BLE services...');
     _running = false;
+    _idleCheckTimer?.cancel();
+    _dutyCycleOffTimer?.cancel();
     _scanRestartTimer?.cancel();
     await _scanSubscription?.cancel();
     await FlutterBluePlus.stopScan();
@@ -260,7 +274,7 @@ class BleTransport extends Transport {
   void _startScanning() {
     _log('Starting scan (unfiltered — will check service after connect)...');
 
-    // Subscribe once to scan results.
+    // Subscribe once to scan results — reused across active/idle mode switches.
     _scanSubscription = FlutterBluePlus.scanResults.listen((results) {
       for (final result in results) {
         // Only consider devices advertising our service UUID **or**
@@ -282,22 +296,77 @@ class BleTransport extends Transport {
       }
     });
 
-    // Start the first scan without a service filter so we can see all
-    // nearby BLE peripherals advertising as "Fluxon".
+    // Start in active mode.
+    _enterActiveMode();
+
+    // Idle check fires every second to detect activity/inactivity transitions.
+    _idleCheckTimer?.cancel();
+    _idleCheckTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!_running) return;
+      final idleSeconds =
+          DateTime.now().difference(_lastActivityTimestamp).inSeconds;
+
+      if (!_isInIdleMode && idleSeconds >= config.idleThresholdSeconds) {
+        _log('Idle for ${idleSeconds}s — entering duty-cycle scan mode');
+        _enterIdleMode();
+      } else if (_isInIdleMode && idleSeconds < config.idleThresholdSeconds) {
+        _log('Activity detected — returning to active scan mode');
+        _enterActiveMode();
+      }
+    });
+  }
+
+  /// Active scan mode: continuous 15-second scans restarted every 18 seconds.
+  /// This is the pre-existing behaviour, preserved exactly.
+  void _enterActiveMode() {
+    if (!_running) return;
+    _isInIdleMode = false;
+    _dutyCycleOffTimer?.cancel();
+    _dutyCycleOffTimer = null;
+    _scanRestartTimer?.cancel();
+
+    _log('Active scan mode: 15 s scan / 18 s restart');
+    FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
+
+    _scanRestartTimer = Timer.periodic(const Duration(seconds: 18), (_) {
+      if (!_running || _isInIdleMode) return;
+      _log('Active mode: restarting scan...');
+      FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
+    });
+  }
+
+  /// Idle scan mode: duty-cycled short scans to conserve battery.
+  /// Scans for [dutyCycleScanOnMs] ms, then pauses for [dutyCycleScanOffMs] ms,
+  /// then repeats — until activity is detected.
+  void _enterIdleMode() {
+    if (!_running) return;
+    _isInIdleMode = true;
+    _scanRestartTimer?.cancel();
+    _scanRestartTimer = null;
+
+    _log('Idle duty-cycle mode: ${config.dutyCycleScanOnMs} ms ON '
+        '/ ${config.dutyCycleScanOffMs} ms OFF');
+    _runDutyCycle();
+  }
+
+  /// Executes one ON→OFF cycle of the duty-cycled scanner and schedules
+  /// the next cycle after the OFF period.
+  void _runDutyCycle() {
+    if (!_running || !_isInIdleMode) return;
+
+    _log('Duty cycle: scan ON for ${config.dutyCycleScanOnMs} ms');
     FlutterBluePlus.startScan(
-      timeout: const Duration(seconds: 15),
+      timeout: Duration(milliseconds: config.dutyCycleScanOnMs),
     );
 
-    // Restart scan periodically.
-    _scanRestartTimer?.cancel();
-    _scanRestartTimer = Timer.periodic(
-      const Duration(seconds: 18),
-      (_) {
-        if (!_running) return;
-        _log('Restarting scan...');
-        FlutterBluePlus.startScan(
-          timeout: const Duration(seconds: 15),
-        );
+    _dutyCycleOffTimer?.cancel();
+    _dutyCycleOffTimer = Timer(
+      Duration(
+        milliseconds: config.dutyCycleScanOnMs + config.dutyCycleScanOffMs,
+      ),
+      () {
+        if (!_running || !_isInIdleMode) return;
+        _runDutyCycle();
       },
     );
   }
@@ -403,6 +472,7 @@ class BleTransport extends Transport {
 
   @override
   Future<bool> sendPacket(FluxonPacket packet, Uint8List peerId) async {
+    _lastActivityTimestamp = DateTime.now();
     final peerHex = HexUtils.encode(peerId);
 
     // Look up the BLE device ID for this peer ID
@@ -440,6 +510,7 @@ class BleTransport extends Transport {
 
   @override
   Future<void> broadcastPacket(FluxonPacket packet) async {
+    _lastActivityTimestamp = DateTime.now();
     final data = packet.encodeWithSignature();
     _log('Broadcasting packet, len=${data.length}');
 
@@ -473,6 +544,7 @@ class BleTransport extends Transport {
     Uint8List data, {
     required String fromDeviceId,
   }) async {
+    _lastActivityTimestamp = DateTime.now();
     _log('Handling incoming data from $fromDeviceId, len=${data.length}');
 
     // Try Noise decryption first if a session is established
