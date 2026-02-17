@@ -171,5 +171,33 @@ void main() {
       expect(controller.state.messages[1].text, equals('hello back'));
       expect(controller.state.messages[1].isLocal, isTrue);
     });
+
+    test('selectPeer sets selectedPeer for private messaging', () {
+      final peer = _makePeerId(0xCC);
+      controller.selectPeer(peer);
+      expect(controller.state.selectedPeer, equals(peer));
+    });
+
+    test('selectPeer(null) clears selectedPeer back to broadcast mode', () {
+      final peer = _makePeerId(0xCC);
+
+      // Enter private message mode
+      controller.selectPeer(peer);
+      expect(controller.state.selectedPeer, equals(peer));
+
+      // Exit private message mode
+      controller.selectPeer(null);
+      expect(controller.state.selectedPeer, isNull);
+    });
+
+    test('copyWith preserves selectedPeer when not passed', () {
+      final peer = _makePeerId(0xDD);
+      controller.selectPeer(peer);
+
+      // copyWith without selectedPeer should preserve it
+      final newState = controller.state.copyWith(isSending: true);
+      expect(newState.selectedPeer, equals(peer));
+      expect(newState.isSending, isTrue);
+    });
   });
 }

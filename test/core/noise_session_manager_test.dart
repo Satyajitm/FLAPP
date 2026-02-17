@@ -206,6 +206,62 @@ void main() {
       expect(initiatorManager.hasSession(device2), isFalse);
     });
 
+    test('failed decryption does not desync subsequent messages', () {
+      const deviceId = 'test_device_desync';
+
+      // Complete handshake
+      final msg1 = initiatorManager.startHandshake(deviceId);
+      final msg2 =
+          responderManager.processHandshakeMessage(deviceId, msg1).response!;
+      final msg3 =
+          initiatorManager.processHandshakeMessage(deviceId, msg2).response!;
+      responderManager.processHandshakeMessage(deviceId, msg3);
+
+      // Send a valid message first
+      final plaintext1 = Uint8List.fromList([1, 2, 3]);
+      final cipher1 = initiatorManager.encrypt(plaintext1, deviceId)!;
+      final decrypted1 = responderManager.decrypt(cipher1, deviceId);
+      expect(decrypted1, equals(plaintext1));
+
+      // Inject garbage — decryption should fail gracefully
+      final garbage = Uint8List.fromList(List.generate(64, (i) => 0xFF));
+      final garbageResult = responderManager.decrypt(garbage, deviceId);
+      expect(garbageResult, isNull);
+
+      // Send another valid message — should still decrypt correctly
+      // (nonce should NOT have been desynced by the failed attempt)
+      final plaintext2 = Uint8List.fromList([4, 5, 6]);
+      final cipher2 = initiatorManager.encrypt(plaintext2, deviceId)!;
+      final decrypted2 = responderManager.decrypt(cipher2, deviceId);
+      expect(decrypted2, equals(plaintext2),
+          reason: 'Valid message after failed decrypt should still work');
+    });
+
+    test('multiple failed decryptions do not cascade into session failure', () {
+      const deviceId = 'test_device_cascade';
+
+      // Complete handshake
+      final msg1 = initiatorManager.startHandshake(deviceId);
+      final msg2 =
+          responderManager.processHandshakeMessage(deviceId, msg1).response!;
+      final msg3 =
+          initiatorManager.processHandshakeMessage(deviceId, msg2).response!;
+      responderManager.processHandshakeMessage(deviceId, msg3);
+
+      // Inject multiple garbage packets
+      for (int i = 0; i < 5; i++) {
+        final garbage = Uint8List.fromList(List.generate(64, (j) => i + j));
+        expect(responderManager.decrypt(garbage, deviceId), isNull);
+      }
+
+      // Valid message should still work after multiple failures
+      final plaintext = Uint8List.fromList([10, 20, 30]);
+      final cipher = initiatorManager.encrypt(plaintext, deviceId)!;
+      final decrypted = responderManager.decrypt(cipher, deviceId);
+      expect(decrypted, equals(plaintext),
+          reason: 'Session should survive multiple failed decryptions');
+    });
+
     test('Multiple peers with independent sessions', () {
       const device1 = 'device_1';
       const device2 = 'device_2';
