@@ -158,8 +158,9 @@ void main() {
   group('MessageType', () {
     test('fromValue returns correct type', () {
       expect(MessageType.fromValue(0x02), equals(MessageType.chat));
-      expect(MessageType.fromValue(0x09), equals(MessageType.locationUpdate));
-      expect(MessageType.fromValue(0x0D), equals(MessageType.emergencyAlert));
+      expect(MessageType.fromValue(0x09), equals(MessageType.noiseEncrypted));
+      expect(MessageType.fromValue(0x0A), equals(MessageType.locationUpdate));
+      expect(MessageType.fromValue(0x0E), equals(MessageType.emergencyAlert));
     });
 
     test('fromValue returns null for unknown value', () {

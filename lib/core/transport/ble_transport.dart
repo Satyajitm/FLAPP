@@ -80,6 +80,7 @@ class BleTransport extends Transport {
     _noiseSessionManager = NoiseSessionManager(
       myStaticPrivKey: _identityManager.privateKey,
       myStaticPubKey: _identityManager.publicKey,
+      localSigningPublicKey: _identityManager.signingPublicKey,
     );
   }
 
@@ -368,7 +369,6 @@ class BleTransport extends Transport {
         peerId: Uint8List(32),
         rssi: result.rssi,
       );
-      _emitPeerUpdate();
 
       // Initiate Noise handshake as central (initiator)
       _initiateNoiseHandshake(deviceId);
@@ -558,12 +558,13 @@ class BleTransport extends Transport {
       _deviceToPeerHex[fromDeviceId] = remotePeerIdHex;
       _peerHexToDevice[remotePeerIdHex] = fromDeviceId;
 
-      // Update the peer connection with the real peer ID
+      // Update the peer connection with the real peer ID and signing key
       final existingConnection = _peerConnections[fromDeviceId];
       if (existingConnection != null) {
         _peerConnections[fromDeviceId] = PeerConnection(
           peerId: remotePeerIdBytes,
           rssi: existingConnection.rssi,
+          signingPublicKey: responseAndKey.remoteSigningPublicKey,
         );
       }
 

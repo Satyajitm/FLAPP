@@ -38,7 +38,7 @@ class MeshChatRepository implements ChatRepository {
 
   void _listenForMessages() {
     _packetSub = _transport.onPacketReceived
-        .where((p) => p.type == MessageType.chat)
+        .where((p) => p.type == MessageType.chat || p.type == MessageType.noiseEncrypted)
         .listen(_handleIncomingPacket);
   }
 
@@ -48,9 +48,11 @@ class MeshChatRepository implements ChatRepository {
     // Skip packets we sent ourselves (already added optimistically by controller)
     if (_myPeerId != null && sender == _myPeerId) return;
 
-    // Decrypt with group key if in a group
+    // For noiseEncrypted: BleTransport already decrypted the payload via Noise session.
+    // Skip group-key decrypt and use payload as-is.
+    // For chat: decrypt with group key if in a group
     Uint8List payload = packet.payload;
-    if (_groupManager.isInGroup) {
+    if (packet.type == MessageType.chat && _groupManager.isInGroup) {
       final decrypted = _groupManager.decryptFromGroup(payload);
       if (decrypted == null) return; // Not in our group — drop
       payload = decrypted;
@@ -92,6 +94,34 @@ class MeshChatRepository implements ChatRepository {
     );
 
     await _transport.broadcastPacket(packet);
+
+    return ChatMessage(
+      id: packet.packetId,
+      sender: sender,
+      text: text,
+      timestamp: DateTime.fromMillisecondsSinceEpoch(packet.timestamp),
+      isLocal: true,
+      isDelivered: true,
+    );
+  }
+
+  @override
+  Future<ChatMessage> sendPrivateMessage({
+    required String text,
+    required PeerId sender,
+    required PeerId recipient,
+  }) async {
+    final payload = BinaryProtocol.encodeChatPayload(text);
+    // No group-key encrypt: Noise session provides the encryption
+
+    final packet = BinaryProtocol.buildPacket(
+      type: MessageType.noiseEncrypted,
+      sourceId: sender.bytes,
+      destId: recipient.bytes,
+      payload: payload,
+    );
+
+    await _transport.sendPacket(packet, recipient.bytes);
 
     return ChatMessage(
       id: packet.packetId,

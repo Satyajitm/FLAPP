@@ -38,6 +38,26 @@ class FakeChatRepository implements ChatRepository {
     );
   }
 
+  @override
+  Future<ChatMessage> sendPrivateMessage({
+    required String text,
+    required PeerId sender,
+    required PeerId recipient,
+  }) async {
+    if (shouldFailOnSend) {
+      throw Exception('Send failed');
+    }
+    sentMessages.add(text);
+    return ChatMessage(
+      id: 'msg-${sentMessages.length}',
+      sender: sender,
+      text: text,
+      timestamp: DateTime.now(),
+      isLocal: true,
+      isDelivered: true,
+    );
+  }
+
   /// Simulate an incoming message from a remote peer.
   void simulateIncoming(ChatMessage message) {
     _messageController.add(message);

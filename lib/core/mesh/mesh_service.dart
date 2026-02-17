@@ -45,6 +45,9 @@ class MeshService implements Transport {
 
   List<PeerConnection> _currentPeers = [];
 
+  /// Ed25519 signing public keys cached from peer connections, keyed by peer hex ID.
+  final Map<String, Uint8List> _peerSigningKeys = {};
+
   static const _cat = 'Mesh';
 
   MeshService({
@@ -165,16 +168,29 @@ class MeshService implements Transport {
   // ---------------------------------------------------------------------------
 
   void _onPacketReceived(FluxonPacket packet) {
-    // TODO: Verify Ed25519 signature when sender's public key is known
-    // (after Noise handshake or via key distribution mechanism).
-    // For now, packets are accepted if signature validation isn't available.
+    // Verify Ed25519 signature when sender's public key is available
     if (packet.signature != null) {
-      // Signature is present but we can't verify it yet without the sender's public key.
-      // This will be implemented in Phase 3B when we add key distribution.
-      SecureLogger.debug(
-        'Packet signed but verification deferred (key unknown)',
-        category: _cat,
-      );
+      final signingKey = _peerSigningKeys[HexUtils.encode(packet.sourceId)];
+      if (signingKey != null) {
+        final valid = Signatures.verify(
+          packet.encode(),
+          packet.signature!,
+          signingKey,
+        );
+        if (!valid) {
+          SecureLogger.warning(
+            'Packet from ${HexUtils.encode(packet.sourceId)} has invalid signature — dropping',
+            category: _cat,
+          );
+          return; // Drop forged packet
+        }
+      } else {
+        // Signing key not yet available (handshake in progress or not yet started)
+        SecureLogger.debug(
+          'Packet signed but signing key not yet known for ${HexUtils.encode(packet.sourceId)} — accepting',
+          category: _cat,
+        );
+      }
     }
 
     // Feed to gossip sync for gap-filling bookkeeping.
@@ -264,6 +280,13 @@ class MeshService implements Transport {
     final newIds = peers.map((p) => p.peerIdHex).toSet();
 
     _currentPeers = peers;
+
+    // Cache Ed25519 signing public keys from peer connections
+    for (final peer in peers) {
+      if (peer.signingPublicKey != null) {
+        _peerSigningKeys[peer.peerIdHex] = peer.signingPublicKey!;
+      }
+    }
 
     // Update our own topology entry with current neighbor list.
     _topology.updateNeighbors(

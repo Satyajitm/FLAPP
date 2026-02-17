@@ -7,11 +7,13 @@ class PeerConnection {
   final Uint8List peerId;
   final int rssi;
   final DateTime connectedAt;
+  final Uint8List? signingPublicKey; // Ed25519 public key for signature verification
 
   PeerConnection({
     required this.peerId,
     this.rssi = 0,
     DateTime? connectedAt,
+    this.signingPublicKey,
   }) : connectedAt = connectedAt ?? DateTime.now();
 
   String get peerIdHex =>

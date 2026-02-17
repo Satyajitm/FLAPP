@@ -172,17 +172,24 @@ flutter test test/features/    # Run feature tests only
 
 ## Known TODOs / Incomplete Wiring
 
-- Noise XX handshake not yet wired into `BleTransport` — `NoiseSessionManager` exists but isn't called on BLE connect/disconnect
-- Ed25519 signature verification on incoming packets is deferred (`MeshService` logs "verification deferred (key unknown)")
-- `BleTransport` creates `PeerConnection` with all-zeros peerId (needs discovery handshake to map BLE device ID to real peerId)
-- Fragment reassembly for payloads exceeding BLE MTU not yet implemented
-- Shared infra providers (`transportProvider`, `myPeerIdProvider`) still live in `chat_providers.dart` — ideally should move to `core/providers/`
+### Phase 3 — ✅ COMPLETE (Signing Key Distribution + Private Chat)
+- **All-zeros peerId emission bug (Phase 2 carry-over)**: ✅ FIXED — Removed pre-handshake `_emitPeerUpdate()` call in `ble_transport.dart` (line 371)
+- **Ed25519 signature verification**: ✅ IMPLEMENTED — `MeshService._onPacketReceived()` now verifies all incoming signatures using cached signing public keys from `PeerConnection`
+- **Signing key distribution**: ✅ IMPLEMENTED — Ed25519 signing public keys are transmitted in Noise handshake messages 2 & 3 (AEAD-encrypted), extracted by `BleTransport`, cached on `PeerConnection`, and verified in `MeshService`
+- **Private chat via Noise session**: ✅ IMPLEMENTED — `MessageType.noiseEncrypted` added for direct Noise-encrypted messages. `ChatRepository` supports `sendPrivateMessage()`, UI includes peer selector with lock icon
+
+See [PHASE3_PROGRESS.md](PHASE3_PROGRESS.md) for detailed completion status. **Test Results: 347 tests passing** (expected ≥315). ✅
+
+### Other Known Limitations
+- `BleTransport` creates `PeerConnection` with placeholder all-zeros peerId before handshake (line 367) — updated to real peerId after handshake (line 564). Removed from streaming after fix to Task 0.
+- Fragment reassembly for payloads exceeding BLE MTU not yet implemented (Phase 4)
+- Shared infra providers (`transportProvider`, `myPeerIdProvider`) still live in `chat_providers.dart` — ideally should move to `core/providers/` (refactoring, not blocking)
 
 ## Conventions
 
 - **Immutable state**: Controllers use `copyWith` pattern on state classes
 - **SRP extraction**: Utility logic is extracted into dedicated classes (e.g., `GeoMath` from `LocationUpdate`, `GroupCipher` from `GroupManager`)
 - **No PII logging**: `SecureLogger` is used throughout — never log keys, peer IDs, or locations
-- **Packet types**: Defined in `MessageType` enum (0x01–0x0D)
+- **Packet types**: Defined in `MessageType` enum (0x01–0x0E, includes noiseEncrypted at 0x09)
 - **Tests**: Mirror the `lib/` structure under `test/`; use abstract interfaces for mocking
 - **Platform-conditional transport**: `BleTransport` on mobile, `StubTransport` on desktop/test

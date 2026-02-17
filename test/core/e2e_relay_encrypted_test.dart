@@ -2,7 +2,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fluxon_app/core/crypto/keys.dart';
-import 'package:fluxon_app/core/crypto/noise_session.dart';
+import 'package:fluxon_app/core/crypto/noise_session_manager.dart';
 import 'package:fluxon_app/core/crypto/sodium_instance.dart';
 import 'package:fluxon_app/core/identity/identity_manager.dart';
 import 'package:fluxon_app/core/mesh/mesh_service.dart';
@@ -67,6 +67,7 @@ void main() {
       final initiatorHandshake = NoiseSessionManager(
         myStaticPrivKey: initiatorKeyPair.privateKey,
         myStaticPubKey: initiatorKeyPair.publicKey,
+        localSigningPublicKey: Uint8List(32),
       );
 
       const deviceId = 'device-relay-test';
@@ -75,6 +76,7 @@ void main() {
       final responderHandshake = NoiseSessionManager(
         myStaticPrivKey: responderKeyPair.privateKey,
         myStaticPubKey: responderKeyPair.publicKey,
+        localSigningPublicKey: Uint8List(32),
       );
 
       var result = responderHandshake.processHandshakeMessage(deviceId, msg1);
@@ -445,7 +447,7 @@ void main() {
       await meshService.start();
 
       try {
-        final originalMessage = 'Long message with special chars: !@#$%^&*()';
+        final originalMessage = 'Long message with special chars: !@#\$%^&*()';
         final payload = BinaryProtocol.encodeChatPayload(originalMessage);
         final packet = BinaryProtocol.buildPacket(
           type: MessageType.chat,

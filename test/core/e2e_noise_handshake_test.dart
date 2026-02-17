@@ -396,11 +396,13 @@ void main() {
       final manager1 = NoiseSessionManager(
         myStaticPrivKey: keyPair1.privateKey,
         myStaticPubKey: keyPair1.publicKey,
+        localSigningPublicKey: Uint8List(32),
       );
 
       final manager2 = NoiseSessionManager(
         myStaticPrivKey: keyPair2.privateKey,
         myStaticPubKey: keyPair2.publicKey,
+        localSigningPublicKey: Uint8List(32),
       );
 
       const deviceId = 'device-test';
@@ -432,11 +434,13 @@ void main() {
       final manager = NoiseSessionManager(
         myStaticPrivKey: keyPair1.privateKey,
         myStaticPubKey: keyPair1.publicKey,
+        localSigningPublicKey: Uint8List(32),
       );
 
       final manager2 = NoiseSessionManager(
         myStaticPrivKey: keyPair2.privateKey,
         myStaticPubKey: keyPair2.publicKey,
+        localSigningPublicKey: Uint8List(32),
       );
 
       const device1 = 'device-1';

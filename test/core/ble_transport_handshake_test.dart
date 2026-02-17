@@ -66,6 +66,7 @@ void main() {
       noiseSessionManager = NoiseSessionManager(
         myStaticPrivKey: identityManager.privateKey,
         myStaticPubKey: identityManager.publicKey,
+        localSigningPublicKey: Uint8List(32), // Dummy key for testing
       );
     });
 
@@ -82,6 +83,7 @@ void main() {
       final noiseInitiator = NoiseSessionManager(
         myStaticPrivKey: identityManager.privateKey,
         myStaticPubKey: identityManager.publicKey,
+        localSigningPublicKey: Uint8List(32),
       );
 
       // Initiator sends message 1
@@ -99,6 +101,7 @@ void main() {
       final responderNoiseManager = NoiseSessionManager(
         myStaticPrivKey: identityManager.privateKey,
         myStaticPubKey: identityManager.publicKey,
+        localSigningPublicKey: Uint8List(32),
       );
 
       // Step 1: Initiator sends message 1
@@ -170,6 +173,7 @@ void main() {
       final noiseManager = NoiseSessionManager(
         myStaticPrivKey: identityManager.privateKey,
         myStaticPubKey: identityManager.publicKey,
+        localSigningPublicKey: Uint8List(32),
       );
 
       final bleDeviceId = 'AA:BB:CC:DD:EE:FF';
@@ -343,11 +347,13 @@ void main() {
       final noiseManager1 = NoiseSessionManager(
         myStaticPrivKey: Uint8List.fromList(List.generate(32, (i) => i)),
         myStaticPubKey: Uint8List.fromList(List.generate(32, (i) => i + 100)),
+        localSigningPublicKey: Uint8List(32),
       );
 
       final noiseManager2 = NoiseSessionManager(
         myStaticPrivKey: Uint8List.fromList(List.generate(32, (i) => i + 50)),
         myStaticPubKey: Uint8List.fromList(List.generate(32, (i) => i + 150)),
+        localSigningPublicKey: Uint8List(32),
       );
 
       // Start handshake
@@ -366,6 +372,7 @@ void main() {
       final noiseManager = NoiseSessionManager(
         myStaticPrivKey: Uint8List.fromList(List.generate(32, (i) => i)),
         myStaticPubKey: Uint8List.fromList(List.generate(32, (i) => i + 100)),
+        localSigningPublicKey: Uint8List(32),
       );
 
       // Receive message 1 from unknown device

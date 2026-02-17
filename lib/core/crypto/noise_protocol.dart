@@ -84,10 +84,10 @@ class NoiseCipherState {
 
     final currentNonce = _nonce;
 
-    // Build 12-byte nonce: 4 zero bytes + 8-byte big-endian counter (RFC 8439)
-    final nonceData = Uint8List(12);
+    // Build 8-byte nonce: big-endian counter (original ChaCha20-Poly1305)
+    final nonceData = Uint8List(8);
     final byteData = ByteData.sublistView(nonceData);
-    byteData.setUint64(4, currentNonce, Endian.big);
+    byteData.setUint64(0, currentNonce, Endian.big);
 
     final sodium = sodiumInstance;
     final ciphertext = sodium.crypto.aeadChaCha20Poly1305.encrypt(
@@ -137,9 +137,9 @@ class NoiseCipherState {
       actualCiphertext = ciphertext;
     }
 
-    // Build 12-byte nonce (RFC 8439: 4 zero bytes + 8-byte big-endian counter)
-    final nonceData = Uint8List(12);
-    ByteData.sublistView(nonceData).setUint64(4, decryptionNonce, Endian.big);
+    // Build 8-byte nonce: big-endian counter (original ChaCha20-Poly1305)
+    final nonceData = Uint8List(8);
+    ByteData.sublistView(nonceData).setUint64(0, decryptionNonce, Endian.big);
 
     final sodium = sodiumInstance;
     try {

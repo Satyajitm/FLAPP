@@ -2,6 +2,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fluxon_app/core/crypto/keys.dart';
 import 'package:fluxon_app/core/crypto/noise_session_manager.dart';
+import 'package:fluxon_app/core/crypto/signatures.dart';
 import 'package:fluxon_app/core/crypto/sodium_instance.dart';
 
 void main() {
@@ -17,6 +18,8 @@ void main() {
     late Uint8List initiatorPubKey;
     late Uint8List responderPrivKey;
     late Uint8List responderPubKey;
+    late Uint8List initiatorSigningKey;
+    late Uint8List responderSigningKey;
 
     setUp(() {
       // Generate key pairs for both sides
@@ -28,15 +31,24 @@ void main() {
       responderPrivKey = responderPair.privateKey;
       responderPubKey = responderPair.publicKey;
 
+      // Generate signing keys for testing
+      final initiatorSigningPair = Signatures.generateSigningKeyPair();
+      initiatorSigningKey = initiatorSigningPair.publicKey;
+
+      final responderSigningPair = Signatures.generateSigningKeyPair();
+      responderSigningKey = responderSigningPair.publicKey;
+
       // Create managers
       initiatorManager = NoiseSessionManager(
         myStaticPrivKey: initiatorPrivKey,
         myStaticPubKey: initiatorPubKey,
+        localSigningPublicKey: initiatorSigningKey,
       );
 
       responderManager = NoiseSessionManager(
         myStaticPrivKey: responderPrivKey,
         myStaticPubKey: responderPubKey,
+        localSigningPublicKey: responderSigningKey,
       );
     });
 

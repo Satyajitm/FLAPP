@@ -11,6 +11,7 @@ import 'noise_session.dart';
 class NoiseSessionManager {
   final Uint8List _myStaticPrivKey;
   final Uint8List _myStaticPubKey;
+  final Uint8List _localSigningPublicKey;
 
   /// Pending handshakes in progress, keyed by BLE device ID.
   final Map<String, NoiseHandshakeState> _pendingHandshakes = {};
@@ -18,11 +19,16 @@ class NoiseSessionManager {
   /// Completed sessions, keyed by BLE device ID.
   final Map<String, NoiseSession> _sessions = {};
 
+  /// Remote peers' Ed25519 signing public keys, keyed by BLE device ID.
+  final Map<String, Uint8List> _peerSigningKeys = {};
+
   NoiseSessionManager({
     required Uint8List myStaticPrivKey,
     required Uint8List myStaticPubKey,
+    required Uint8List localSigningPublicKey,
   })  : _myStaticPrivKey = myStaticPrivKey,
-        _myStaticPubKey = myStaticPubKey;
+        _myStaticPubKey = myStaticPubKey,
+        _localSigningPublicKey = localSigningPublicKey;
 
   /// Start a Noise XX handshake as the initiator (central role).
   ///
@@ -52,7 +58,9 @@ class NoiseSessionManager {
   /// - `response`: the Noise message to send back (null if no response needed)
   /// - `remotePubKey`: the remote peer's static public key after handshake completion
   ///   (non-null only when `handshakeState.isComplete` becomes true)
-  ({Uint8List? response, Uint8List? remotePubKey}) processHandshakeMessage(
+  /// - `remoteSigningPublicKey`: the remote peer's Ed25519 signing public key after
+  ///   handshake completion (non-null only when `handshakeState.isComplete` becomes true)
+  ({Uint8List? response, Uint8List? remotePubKey, Uint8List? remoteSigningPublicKey}) processHandshakeMessage(
     String deviceId,
     Uint8List messageBytes,
   ) {
@@ -65,7 +73,8 @@ class NoiseSessionManager {
       );
 
       state.readMessage(messageBytes); // <- e
-      final message2 = state.writeMessage(); // -> e, ee, s, es
+      // Include our signing public key as payload in message 2 (AEAD-encrypted via es DH)
+      final message2 = state.writeMessage(payload: _localSigningPublicKey); // -> e, ee, s, es
 
       _pendingHandshakes[deviceId] = state;
 
@@ -74,20 +83,24 @@ class NoiseSessionManager {
         'responding as responder',
       );
 
-      return (response: message2, remotePubKey: null);
+      return (response: message2, remotePubKey: null, remoteSigningPublicKey: null);
     }
 
     final state = _pendingHandshakes[deviceId]!;
 
     // Process based on current role and handshake progress.
     if (state.role == NoiseRole.initiator) {
-      // Initiator receiving message 2: <- e, ee, s, es
-      state.readMessage(messageBytes);
-      final message3 = state.writeMessage(); // -> s, se
+      // Initiator receiving message 2: <- e, ee, s, es (with remote signing key as payload)
+      final remoteSigningKey = state.readMessage(messageBytes); // returns decrypted payload
+      // Include our signing public key as payload in message 3 (AEAD-encrypted via se DH)
+      final message3 = state.writeMessage(payload: _localSigningPublicKey); // -> s, se
 
       if (state.isComplete) {
         final remotePubKey = state.remoteStaticPublic;
-        if (remotePubKey != null) {
+        if (remotePubKey != null && remoteSigningKey.isNotEmpty && remoteSigningKey.length == 32) {
+          // Store remote signing key
+          _peerSigningKeys[deviceId] = remoteSigningKey;
+
           final session = NoiseSession.fromHandshake(
             state,
             remotePeerId: remotePubKey,
@@ -99,18 +112,21 @@ class NoiseSessionManager {
             '[NoiseSessionManager] Initiator handshake complete for $deviceId, session established',
           );
 
-          return (response: message3, remotePubKey: remotePubKey);
+          return (response: message3, remotePubKey: remotePubKey, remoteSigningPublicKey: remoteSigningKey);
         }
       }
 
-      return (response: message3, remotePubKey: null);
+      return (response: message3, remotePubKey: null, remoteSigningPublicKey: null);
     } else {
-      // Responder receiving message 3: -> s, se
-      state.readMessage(messageBytes);
+      // Responder receiving message 3: -> s, se (with remote signing key as payload)
+      final remoteSigningKey = state.readMessage(messageBytes); // returns decrypted payload
 
       if (state.isComplete) {
         final remotePubKey = state.remoteStaticPublic;
-        if (remotePubKey != null) {
+        if (remotePubKey != null && remoteSigningKey.isNotEmpty && remoteSigningKey.length == 32) {
+          // Store remote signing key
+          _peerSigningKeys[deviceId] = remoteSigningKey;
+
           final session = NoiseSession.fromHandshake(
             state,
             remotePeerId: remotePubKey,
@@ -122,11 +138,11 @@ class NoiseSessionManager {
             '[NoiseSessionManager] Responder handshake complete for $deviceId, session established',
           );
 
-          return (response: null, remotePubKey: remotePubKey);
+          return (response: null, remotePubKey: remotePubKey, remoteSigningPublicKey: remoteSigningKey);
         }
       }
 
-      return (response: null, remotePubKey: null);
+      return (response: null, remotePubKey: null, remoteSigningPublicKey: null);
     }
   }
 
@@ -161,6 +177,7 @@ class NoiseSessionManager {
   void removeSession(String deviceId) {
     _sessions.remove(deviceId);
     _pendingHandshakes.remove(deviceId);
+    _peerSigningKeys.remove(deviceId);
     SecureLogger.debug('[NoiseSessionManager] Removed session for $deviceId');
   }
 
@@ -175,10 +192,16 @@ class NoiseSessionManager {
     return null;
   }
 
+  /// Get the remote peer's Ed25519 signing public key (available after handshake).
+  ///
+  /// Returns null if signing key not yet received.
+  Uint8List? getSigningPublicKey(String deviceId) => _peerSigningKeys[deviceId];
+
   /// Clear all sessions and pending handshakes (e.g., on app shutdown).
   void clear() {
     _pendingHandshakes.clear();
     _sessions.forEach((_, session) => session.dispose());
     _sessions.clear();
+    _peerSigningKeys.clear();
   }
 }
