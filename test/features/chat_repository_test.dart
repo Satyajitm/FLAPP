@@ -148,9 +148,9 @@ void main() {
       expect(sentPacket.type, equals(MessageType.chat));
 
       // Verify payload round-trips correctly
-      final decodedText =
+      final decodedPayload =
           BinaryProtocol.decodeChatPayload(sentPacket.payload);
-      expect(decodedText, equals('Test message'));
+      expect(decodedPayload.text, equals('Test message'));
     });
 
     test('sendMessage handles Unicode text', () async {
@@ -436,7 +436,7 @@ void main() {
 
       final pkt = transport.broadcastedPackets.first;
       final decoded = BinaryProtocol.decodeChatPayload(pkt.payload);
-      expect(decoded, equals('plain msg'));
+      expect(decoded.text, equals('plain msg'));
     });
 
     test('incoming plaintext message is received without decryption', () async {

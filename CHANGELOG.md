@@ -5,6 +5,160 @@ Each entry records **what** changed, **which files** were affected, and **why** 
 
 ---
 
+## [v2.1] — Phase 4 (continued): User Display Name + Onboarding
+**Date:** 2026-02-17
+**Branch:** `phase_4`
+**Tests:** 92 feature tests passing
+**Analyzer:** 0 errors
+
+### Summary
+Added user identity via a display name: first-run onboarding asks for the user's name, which is persisted in secure storage and distributed in every chat message payload. Remote peers see the sender's name in message bubbles instead of the cryptographic shortId. Users can change their name at any time from the group menu.
+
+No transport, crypto, mesh, or group management code was changed.
+
+---
+
+### Changes
+
+#### 1. User Profile Storage — `lib/core/identity/user_profile_manager.dart` *(new)*
+
+**What changed:**
+- New `UserProfileManager` class — loads/saves `user_display_name` via `flutter_secure_storage`
+- `initialize()` — loads persisted name on startup
+- `setName(String)` — persists trimmed name; deletes key if empty
+
+**Why:**
+Dedicated class keeps naming concerns separate from cryptographic identity (`IdentityManager`) and group membership (`GroupManager`).
+
+---
+
+#### 2. Profile Providers — `lib/core/providers/profile_providers.dart` *(new)*
+
+**What changed:**
+- `userProfileManagerProvider` — `Provider<UserProfileManager>`, overridden in `main.dart`
+- `displayNameProvider` — `StateProvider<String>`, overridden in `main.dart` with loaded name; updates reactively when the user changes their name at runtime
+
+**Why:**
+`StateProvider` allows the onboarding screen and name-change dialog to update the state in one place and have the entire widget tree rebuild automatically (including `FluxonApp`'s home switch).
+
+---
+
+#### 3. Chat Payload Format — `lib/core/protocol/binary_protocol.dart`
+
+**What changed:**
+- New `ChatPayload` class with `senderName` and `text` fields
+- `encodeChatPayload(text, {senderName})` — when `senderName` is non-empty, encodes as compact JSON `{"n":"Alice","t":"Hello"}` (UTF-8); empty name = plain UTF-8 (legacy format unchanged)
+- `decodeChatPayload(Uint8List)` now returns `ChatPayload` instead of `String`; detects JSON format via `{"n":` prefix with fallback to plain-text
+
+**Why:**
+Attaching the name to each message packet is the simplest way to propagate names across the mesh without a separate announcement protocol. The JSON detection scheme maintains backward compatibility with legacy plain-text messages.
+
+---
+
+#### 4. `ChatMessage` Model — `lib/features/chat/message_model.dart`
+
+**What changed:**
+- Added `senderName` field (`String`, default `''`)
+
+---
+
+#### 5. `ChatRepository` Interface — `lib/features/chat/data/chat_repository.dart`
+
+**What changed:**
+- Added optional `senderName` parameter to `sendMessage()`
+
+---
+
+#### 6. `MeshChatRepository` — `lib/features/chat/data/mesh_chat_repository.dart`
+
+**What changed:**
+- `sendMessage()` accepts `senderName` and passes it to `encodeChatPayload()`
+- `_handleIncomingPacket()` calls updated `decodeChatPayload()` and extracts `senderName` onto the `ChatMessage`
+- Local `ChatMessage` returned from `sendMessage()` also carries `senderName`
+
+---
+
+#### 7. `ChatController` — `lib/features/chat/chat_controller.dart`
+
+**What changed:**
+- Added `String Function() getDisplayName` constructor parameter (callback evaluated at send time)
+- `sendMessage()` passes `getDisplayName()` result as `senderName` to the repository
+
+**Why:**
+Using a callback rather than a captured value means name changes take effect immediately on the next message, without recreating the controller.
+
+---
+
+#### 8. `chat_providers.dart` — `lib/features/chat/chat_providers.dart`
+
+**What changed:**
+- Imports `profile_providers.dart`
+- Passes `getDisplayName: () => ref.read(displayNameProvider)` when constructing `ChatController`
+
+---
+
+#### 9. Onboarding Screen — `lib/features/onboarding/onboarding_screen.dart` *(new)*
+
+**What changed:**
+- Hero icon (`Icons.person_outline`) in `primaryContainer` circle (88×88 px)
+- "Welcome to FluxonApp" heading + subtitle
+- Single `TextField` with `autofocus` for name entry
+- `FilledButton` "Let's go" — awaits `UserProfileManager.setName()`, then sets `displayNameProvider` state, triggering `FluxonApp` rebuild
+
+---
+
+#### 10. `app.dart` — `lib/app.dart`
+
+**What changed:**
+- `FluxonApp` changed from `StatelessWidget` to `ConsumerWidget`
+- Watches `displayNameProvider`; renders `OnboardingScreen` when `displayName.isEmpty`, otherwise `_HomeScreen`
+
+**Why:**
+Reactive provider-driven routing avoids manual navigation — the root widget simply rebuilds when the name is set.
+
+---
+
+#### 11. `chat_screen.dart` — `lib/features/chat/chat_screen.dart`
+
+**What changed:**
+- `_MessageBubble` shows `message.senderName` for remote messages (falls back to `sender.shortId` if empty)
+- `_showGroupMenu()` now shows a "Your name" `ListTile` at the top — displays current name and navigates to `_showChangeNameDialog()`
+- New `_showChangeNameDialog()` — `AlertDialog` with pre-filled `TextField`; on save, calls `UserProfileManager.setName()` and updates `displayNameProvider`
+- New `_commitNameChange()` helper
+
+---
+
+#### 12. `main.dart` — `lib/main.dart`
+
+**What changed:**
+- Imports `UserProfileManager` and `profile_providers`
+- `UserProfileManager()` initialized and `await profileManager.initialize()` called before `runApp`
+- `ProviderScope` overrides include `userProfileManagerProvider` and `displayNameProvider`
+
+---
+
+### Test Updates
+
+**`test/features/chat_controller_test.dart`**
+- `FakeChatRepository.sendMessage()` updated to accept `senderName` parameter
+- `ChatController` constructor updated with `getDisplayName: () => 'TestUser'`
+
+**`test/features/chat_repository_test.dart`**
+- Two assertions that compared `BinaryProtocol.decodeChatPayload(...)` directly to a `String` updated to access `.text` on the returned `ChatPayload`
+
+**`test/features/app_lifecycle_test.dart`**
+- `_buildApp()` helper updated to override `userProfileManagerProvider` and `displayNameProvider` (with `'Tester'` so `_HomeScreen` renders)
+
+---
+
+### What Did NOT Change
+- All of `lib/core/` — transport, mesh, crypto, Noise protocol: **unchanged**
+- `GroupManager`, `GroupStorage`, `GroupCipher` — **unchanged**
+- Wire packet header format — **unchanged** (only the payload encoding changed for chat type)
+- Location, Emergency features — **unchanged**
+
+---
+
 ## [v2.0] — Phase 4: UI Redesign + Private Chat Removal
 **Date:** 2026-02-17
 **Branch:** `phase_4`

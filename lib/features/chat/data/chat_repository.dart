@@ -12,11 +12,15 @@ abstract class ChatRepository {
 
   /// Send a chat message text as a broadcast to all connected peers.
   ///
+  /// [senderName] is the user's display name and is embedded in the payload so
+  /// that recipients can show it alongside the message.
+  ///
   /// Returns the [ChatMessage] that was sent (with its generated ID and
   /// timestamp) so the caller can perform an optimistic UI update.
   Future<ChatMessage> sendMessage({
     required String text,
     required PeerId sender,
+    String senderName = '',
   });
 
   /// Send a private chat message to a specific peer via Noise session.

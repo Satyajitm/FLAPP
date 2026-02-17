@@ -1,56 +1,64 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'core/providers/profile_providers.dart';
 import 'core/services/foreground_service_manager.dart';
 import 'features/chat/chat_screen.dart';
 import 'features/location/location_screen.dart';
 import 'features/emergency/emergency_screen.dart';
 import 'features/group/create_group_screen.dart';
 import 'features/group/join_group_screen.dart';
+import 'features/onboarding/onboarding_screen.dart';
 
 /// Root MaterialApp with bottom navigation between Chat, Map, and Emergency.
-class FluxonApp extends StatelessWidget {
+///
+/// Watches [displayNameProvider]: shows [OnboardingScreen] on first launch
+/// (when no name is stored) and [_HomeScreen] once a name has been set.
+class FluxonApp extends ConsumerWidget {
   const FluxonApp({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final displayName = ref.watch(displayNameProvider);
+
     return WithForegroundTask(
       child: MaterialApp(
-      title: 'FluxonApp',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorSchemeSeed: const Color(0xFF3D5AFE),
-        useMaterial3: true,
-        brightness: Brightness.light,
-        appBarTheme: const AppBarTheme(
-          centerTitle: false,
-          elevation: 0,
-          scrolledUnderElevation: 0,
+        title: 'FluxonApp',
+        debugShowCheckedModeBanner: false,
+        theme: ThemeData(
+          colorSchemeSeed: const Color(0xFF3D5AFE),
+          useMaterial3: true,
+          brightness: Brightness.light,
+          appBarTheme: const AppBarTheme(
+            centerTitle: false,
+            elevation: 0,
+            scrolledUnderElevation: 0,
+          ),
+          navigationBarTheme: const NavigationBarThemeData(
+            elevation: 0,
+            labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+          ),
         ),
-        navigationBarTheme: const NavigationBarThemeData(
-          elevation: 0,
-          labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+        darkTheme: ThemeData(
+          colorSchemeSeed: const Color(0xFF3D5AFE),
+          useMaterial3: true,
+          brightness: Brightness.dark,
+          appBarTheme: const AppBarTheme(
+            centerTitle: false,
+            elevation: 0,
+            scrolledUnderElevation: 0,
+          ),
+          navigationBarTheme: const NavigationBarThemeData(
+            elevation: 0,
+            labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+          ),
         ),
+        home: displayName.isEmpty ? const OnboardingScreen() : const _HomeScreen(),
+        routes: {
+          '/create-group': (_) => const CreateGroupScreen(),
+          '/join-group': (_) => const JoinGroupScreen(),
+        },
       ),
-      darkTheme: ThemeData(
-        colorSchemeSeed: const Color(0xFF3D5AFE),
-        useMaterial3: true,
-        brightness: Brightness.dark,
-        appBarTheme: const AppBarTheme(
-          centerTitle: false,
-          elevation: 0,
-          scrolledUnderElevation: 0,
-        ),
-        navigationBarTheme: const NavigationBarThemeData(
-          elevation: 0,
-          labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
-        ),
-      ),
-      home: const _HomeScreen(),
-      routes: {
-        '/create-group': (_) => const CreateGroupScreen(),
-        '/join-group': (_) => const JoinGroupScreen(),
-      },
-    ),
     );
   }
 }

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/providers/group_providers.dart';
+import '../../core/providers/profile_providers.dart';
 import 'chat_providers.dart';
 import 'message_model.dart';
 
@@ -50,6 +51,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       ),
       builder: (ctx) {
         final groupManager = ref.read(groupManagerProvider);
+        final displayName = ref.read(displayNameProvider);
         return SafeArea(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -65,6 +67,26 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               ),
               const Padding(
                 padding: EdgeInsets.fromLTRB(20, 4, 20, 12),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Settings',
+                    style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.person_outline),
+                title: Text(displayName.isNotEmpty ? displayName : 'Set your name'),
+                subtitle: const Text('Tap to change'),
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  _showChangeNameDialog();
+                },
+              ),
+              const Divider(height: 1),
+              const Padding(
+                padding: EdgeInsets.fromLTRB(20, 12, 20, 8),
                 child: Align(
                   alignment: Alignment.centerLeft,
                   child: Text(
@@ -104,6 +126,45 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         );
       },
     );
+  }
+
+  void _showChangeNameDialog() {
+    final controller = TextEditingController(
+      text: ref.read(displayNameProvider),
+    );
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Your name'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          textCapitalization: TextCapitalization.words,
+          decoration: const InputDecoration(
+            hintText: 'Enter your name',
+          ),
+          onSubmitted: (_) => _commitNameChange(ctx, controller.text),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => _commitNameChange(ctx, controller.text),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    ).then((_) => controller.dispose());
+  }
+
+  Future<void> _commitNameChange(BuildContext ctx, String name) async {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return;
+    await ref.read(userProfileManagerProvider).setName(trimmed);
+    ref.read(displayNameProvider.notifier).state = trimmed;
+    if (ctx.mounted) Navigator.of(ctx).pop();
   }
 
   @override
@@ -403,11 +464,12 @@ class _MessageBubble extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.only(bottom: 4),
                 child: Text(
-                  message.sender.shortId,
+                  message.senderName.isNotEmpty
+                      ? message.senderName
+                      : message.sender.shortId,
                   style: TextStyle(
                     fontSize: 11,
                     fontWeight: FontWeight.w600,
-                    fontFamily: 'monospace',
                     color: colorScheme.primary,
                     letterSpacing: 0.3,
                   ),

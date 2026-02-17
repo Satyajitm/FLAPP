@@ -36,13 +36,16 @@ class ChatState {
 class ChatController extends StateNotifier<ChatState> {
   final ChatRepository _repository;
   final PeerId _myPeerId;
+  final String Function() _getDisplayName;
   StreamSubscription? _messageSub;
 
   ChatController({
     required ChatRepository repository,
     required PeerId myPeerId,
+    required String Function() getDisplayName,
   })  : _repository = repository,
         _myPeerId = myPeerId,
+        _getDisplayName = getDisplayName,
         super(const ChatState()) {
     _listenForMessages();
   }
@@ -63,6 +66,7 @@ class ChatController extends StateNotifier<ChatState> {
       final message = await _repository.sendMessage(
         text: text,
         sender: _myPeerId,
+        senderName: _getDisplayName(),
       );
 
       state = state.copyWith(

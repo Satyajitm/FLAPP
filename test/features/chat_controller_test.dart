@@ -23,6 +23,7 @@ class FakeChatRepository implements ChatRepository {
   Future<ChatMessage> sendMessage({
     required String text,
     required PeerId sender,
+    String senderName = '',
   }) async {
     if (shouldFailOnSend) {
       throw Exception('Send failed');
@@ -31,6 +32,7 @@ class FakeChatRepository implements ChatRepository {
     return ChatMessage(
       id: 'msg-${sentMessages.length}',
       sender: sender,
+      senderName: senderName,
       text: text,
       timestamp: DateTime.now(),
       isLocal: true,
@@ -101,6 +103,7 @@ void main() {
       controller = ChatController(
         repository: repository,
         myPeerId: myPeerId,
+        getDisplayName: () => 'TestUser',
       );
     });
 

@@ -8,6 +8,10 @@ class ChatMessage {
   /// Sender's peer ID.
   final PeerId sender;
 
+  /// Sender's display name. Empty string if the peer is a legacy client that
+  /// did not include a name, or if the name is not yet known.
+  final String senderName;
+
   /// Message text content.
   final String text;
 
@@ -25,6 +29,7 @@ class ChatMessage {
     required this.sender,
     required this.text,
     required this.timestamp,
+    this.senderName = '',
     this.isLocal = false,
     this.isDelivered = false,
   });

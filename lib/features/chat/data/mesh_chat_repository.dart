@@ -58,12 +58,13 @@ class MeshChatRepository implements ChatRepository {
       payload = decrypted;
     }
 
-    final text = BinaryProtocol.decodeChatPayload(payload);
+    final chatPayload = BinaryProtocol.decodeChatPayload(payload);
 
     final message = ChatMessage(
       id: packet.packetId,
       sender: sender,
-      text: text,
+      senderName: chatPayload.senderName,
+      text: chatPayload.text,
       timestamp: DateTime.fromMillisecondsSinceEpoch(packet.timestamp),
       isLocal: false,
     );
@@ -78,8 +79,9 @@ class MeshChatRepository implements ChatRepository {
   Future<ChatMessage> sendMessage({
     required String text,
     required PeerId sender,
+    String senderName = '',
   }) async {
-    var payload = BinaryProtocol.encodeChatPayload(text);
+    var payload = BinaryProtocol.encodeChatPayload(text, senderName: senderName);
 
     // Encrypt with group key if in a group
     if (_groupManager.isInGroup) {
@@ -98,6 +100,7 @@ class MeshChatRepository implements ChatRepository {
     return ChatMessage(
       id: packet.packetId,
       sender: sender,
+      senderName: senderName,
       text: text,
       timestamp: DateTime.fromMillisecondsSinceEpoch(packet.timestamp),
       isLocal: true,

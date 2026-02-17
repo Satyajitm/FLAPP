@@ -3,18 +3,50 @@ import 'dart:typed_data';
 import 'packet.dart';
 import 'message_types.dart';
 
+/// Decoded chat payload — contains sender display name and message text.
+class ChatPayload {
+  /// Sender's display name. Empty string if the message was sent by a legacy
+  /// client that did not include a name.
+  final String senderName;
+
+  /// Message text content.
+  final String text;
+
+  const ChatPayload({required this.senderName, required this.text});
+}
+
 /// Encodes and decodes high-level message payloads into FluxonPacket payloads.
 ///
 /// Ported from Bitchat's BinaryProtocol with Fluxonlink additions.
 class BinaryProtocol {
   /// Encode a chat message payload.
-  static Uint8List encodeChatPayload(String text) {
-    return Uint8List.fromList(utf8.encode(text));
+  ///
+  /// When [senderName] is non-empty the payload is serialised as a compact
+  /// JSON object: `{"n":"Alice","t":"Hello"}`. Legacy clients (no name) use
+  /// plain UTF-8 text so the format is backward-compatible.
+  static Uint8List encodeChatPayload(String text, {String senderName = ''}) {
+    if (senderName.isEmpty) return Uint8List.fromList(utf8.encode(text));
+    final map = {'n': senderName, 't': text};
+    return Uint8List.fromList(utf8.encode(jsonEncode(map)));
   }
 
   /// Decode a chat message payload.
-  static String decodeChatPayload(Uint8List payload) {
-    return utf8.decode(payload, allowMalformed: true);
+  ///
+  /// Detects the new JSON format (`{"n":`) and returns a [ChatPayload] with
+  /// both the sender name and text. Legacy plain-text payloads return an
+  /// empty [senderName].
+  static ChatPayload decodeChatPayload(Uint8List payload) {
+    final raw = utf8.decode(payload, allowMalformed: true);
+    if (raw.startsWith('{"n":')) {
+      try {
+        final map = jsonDecode(raw) as Map<String, dynamic>;
+        return ChatPayload(
+          senderName: map['n'] as String? ?? '',
+          text: map['t'] as String? ?? '',
+        );
+      } catch (_) {}
+    }
+    return ChatPayload(senderName: '', text: raw);
   }
 
   /// Encode a location update payload.

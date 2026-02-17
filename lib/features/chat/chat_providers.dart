@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/identity/peer_id.dart';
 import '../../core/providers/group_providers.dart';
+import '../../core/providers/profile_providers.dart';
 import '../../core/transport/transport.dart';
 import '../../core/transport/transport_config.dart';
 import 'data/chat_repository.dart';
@@ -63,5 +64,7 @@ final chatControllerProvider =
   return ChatController(
     repository: repository,
     myPeerId: myPeerId,
+    // Read at send time so name changes are reflected immediately.
+    getDisplayName: () => ref.read(displayNameProvider),
   );
 });

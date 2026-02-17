@@ -8,7 +8,9 @@ import 'app.dart';
 import 'core/crypto/sodium_instance.dart';
 import 'core/identity/group_manager.dart';
 import 'core/identity/identity_manager.dart';
+import 'core/identity/user_profile_manager.dart';
 import 'core/providers/group_providers.dart';
+import 'core/providers/profile_providers.dart';
 import 'core/mesh/mesh_service.dart';
 import 'core/services/foreground_service_manager.dart';
 import 'core/transport/ble_transport.dart';
@@ -36,6 +38,10 @@ Future<void> main() async {
   // Initialize group manager (restores persisted group if any)
   final groupManager = GroupManager();
   await groupManager.initialize();
+
+  // Initialize user profile (loads or creates display name)
+  final profileManager = UserProfileManager();
+  await profileManager.initialize();
 
   // Derive peer ID from the identity's public key
   final myPeerId = identityManager.myPeerId;
@@ -68,6 +74,8 @@ Future<void> main() async {
         transportProvider.overrideWithValue(transport),
         myPeerIdProvider.overrideWithValue(myPeerId),
         groupManagerProvider.overrideWithValue(groupManager),
+        userProfileManagerProvider.overrideWithValue(profileManager),
+        displayNameProvider.overrideWith((ref) => profileManager.displayName),
       ],
       child: const FluxonApp(),
     ),

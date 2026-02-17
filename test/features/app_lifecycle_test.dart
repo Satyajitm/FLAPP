@@ -6,7 +6,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:fluxon_app/app.dart';
 import 'package:fluxon_app/core/identity/group_manager.dart';
 import 'package:fluxon_app/core/identity/peer_id.dart';
+import 'package:fluxon_app/core/identity/user_profile_manager.dart';
 import 'package:fluxon_app/core/providers/group_providers.dart';
+import 'package:fluxon_app/core/providers/profile_providers.dart';
 import 'package:fluxon_app/core/transport/stub_transport.dart';
 import 'package:fluxon_app/features/chat/chat_providers.dart';
 
@@ -14,15 +16,18 @@ import 'package:fluxon_app/features/chat/chat_providers.dart';
 // Helper
 // ---------------------------------------------------------------------------
 
-Widget _buildApp() {
+Widget _buildApp({String displayName = 'Tester'}) {
   final peerIdBytes = Uint8List(32);
   final transport = StubTransport(myPeerId: peerIdBytes);
+  final profile = UserProfileManager();
 
   return ProviderScope(
     overrides: [
       transportProvider.overrideWithValue(transport),
       myPeerIdProvider.overrideWithValue(PeerId(peerIdBytes)),
       groupManagerProvider.overrideWithValue(GroupManager()),
+      userProfileManagerProvider.overrideWithValue(profile),
+      displayNameProvider.overrideWith((ref) => displayName),
     ],
     child: const FluxonApp(),
   );
