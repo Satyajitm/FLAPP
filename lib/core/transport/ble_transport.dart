@@ -4,7 +4,14 @@ import 'dart:typed_data';
 import 'package:ble_peripheral/ble_peripheral.dart' as ble_p;
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
+import '../../shared/hex_utils.dart';
+import '../../shared/logger.dart';
+import '../crypto/keys.dart';
+import '../crypto/noise_session_manager.dart';
+import '../identity/identity_manager.dart';
 import '../mesh/deduplicator.dart';
+import '../protocol/binary_protocol.dart';
+import '../protocol/message_types.dart';
 import '../protocol/packet.dart';
 import 'transport.dart';
 import 'transport_config.dart';
@@ -22,6 +29,7 @@ import 'transport_config.dart';
 class BleTransport extends Transport {
   final TransportConfig config;
   final Uint8List _myPeerId;
+  final IdentityManager _identityManager;
 
   final _packetController = StreamController<FluxonPacket>.broadcast();
   final _peersController = StreamController<List<PeerConnection>>.broadcast();
@@ -35,6 +43,15 @@ class BleTransport extends Transport {
   /// Deduplicator to prevent processing the same packet twice (e.g. received
   /// via both central notification and peripheral write callback).
   final MessageDeduplicator _deduplicator;
+
+  /// Noise session manager for per-device encryption.
+  late final NoiseSessionManager _noiseSessionManager;
+
+  /// Maps BLE device ID to Fluxon peer ID hex (learned from handshake).
+  final Map<String, String> _deviceToPeerHex = {};
+
+  /// Reverse map: Fluxon peer ID hex to BLE device ID.
+  final Map<String, String> _peerHexToDevice = {};
 
   bool _running = false;
   StreamSubscription? _scanSubscription;
@@ -51,12 +68,21 @@ class BleTransport extends Transport {
 
   BleTransport({
     required Uint8List myPeerId,
+    required IdentityManager identityManager,
     this.config = TransportConfig.defaultConfig,
   })  : _myPeerId = myPeerId,
+        _identityManager = identityManager,
         _deduplicator = MessageDeduplicator(
           maxAge: const Duration(seconds: 300),
           maxCount: 1024,
-        );
+        ) {
+    // Initialize Noise session manager
+    _noiseSessionManager = NoiseSessionManager(
+      myStaticPrivKey: _identityManager.privateKey,
+      myStaticPubKey: _identityManager.publicKey,
+      localSigningPublicKey: _identityManager.signingPublicKey,
+    );
+  }
 
   @override
   Uint8List get myPeerId => _myPeerId;
@@ -125,6 +151,9 @@ class BleTransport extends Transport {
     _connectedDevices.clear();
     _peerConnections.clear();
     _peerCharacteristics.clear();
+    _deviceToPeerHex.clear();
+    _peerHexToDevice.clear();
+    _noiseSessionManager.clear();
     _emitPeerUpdate();
   }
 
@@ -161,7 +190,7 @@ class BleTransport extends Transport {
         (deviceId, characteristicId, offset, value) {
           _log('Received write from $deviceId, char=$characteristicId, len=${value?.length}');
           if (value != null) {
-            _handleIncomingData(Uint8List.fromList(value));
+            _handleIncomingData(Uint8List.fromList(value), fromDeviceId: deviceId);
           }
           return null;
         },
@@ -293,6 +322,14 @@ class BleTransport extends Transport {
       );
       _log('SUCCESS: Connected to $deviceId');
 
+      // Negotiate larger MTU for mesh packets (header 78 + payload + sig 64)
+      try {
+        final mtu = await result.device.requestMtu(512);
+        _log('Negotiated MTU: $mtu for $deviceId');
+      } catch (e) {
+        _log('MTU negotiation failed for $deviceId (using default): $e');
+      }
+
       _log('Discovering services on $deviceId...');
       final services = await result.device.discoverServices();
       _log('Found ${services.length} services on $deviceId');
@@ -324,7 +361,7 @@ class BleTransport extends Transport {
       await char.setNotifyValue(true);
       char.onValueReceived.listen((data) {
         _log('Received notification from $deviceId, len=${data.length}');
-        _handleIncomingData(Uint8List.fromList(data));
+        _handleIncomingData(Uint8List.fromList(data), fromDeviceId: deviceId);
       });
 
       _connectedDevices[deviceId] = result.device;
@@ -332,11 +369,21 @@ class BleTransport extends Transport {
         peerId: Uint8List(32),
         rssi: result.rssi,
       );
-      _emitPeerUpdate();
+
+      // Initiate Noise handshake as central (initiator)
+      _initiateNoiseHandshake(deviceId);
 
       result.device.connectionState.listen((state) {
         _log('Device $deviceId state: $state');
         if (state == BluetoothConnectionState.disconnected) {
+          _noiseSessionManager.removeSession(deviceId);
+
+          // Clean up device-to-peer ID mappings
+          final peerHex = _deviceToPeerHex.remove(deviceId);
+          if (peerHex != null) {
+            _peerHexToDevice.remove(peerHex);
+          }
+
           _connectedDevices.remove(deviceId);
           _peerConnections.remove(deviceId);
           _peerCharacteristics.remove(deviceId);
@@ -356,16 +403,33 @@ class BleTransport extends Transport {
 
   @override
   Future<bool> sendPacket(FluxonPacket packet, Uint8List peerId) async {
-    final peerHex =
-        peerId.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-    final char = _peerCharacteristics[peerHex];
+    final peerHex = HexUtils.encode(peerId);
+
+    // Look up the BLE device ID for this peer ID
+    final deviceId = _peerHexToDevice[peerHex];
+    if (deviceId == null) {
+      _log('ERROR: No device mapping for peer $peerHex');
+      return false;
+    }
+
+    final char = _peerCharacteristics[deviceId];
     if (char == null) {
-      _log('ERROR: No characteristic for peer $peerHex');
+      _log('ERROR: No characteristic for device $deviceId (peer $peerHex)');
       return false;
     }
 
     try {
-      await char.write(packet.encodeWithSignature(), withoutResponse: true);
+      // Encrypt payload if a Noise session is established
+      var encodedData = packet.encodeWithSignature();
+      if (_noiseSessionManager.hasSession(deviceId)) {
+        final ciphertext = _noiseSessionManager.encrypt(encodedData, deviceId);
+        if (ciphertext != null) {
+          encodedData = ciphertext;
+          _log('Encrypted packet for $peerHex');
+        }
+      }
+
+      await char.write(encodedData, withoutResponse: true);
       _log('Packet sent to $peerHex');
       return true;
     } catch (e) {
@@ -405,24 +469,142 @@ class BleTransport extends Transport {
   // Incoming data handling (shared by both roles)
   // ---------------------------------------------------------------------------
 
-  void _handleIncomingData(Uint8List data) {
-    _log('Handling incoming data, len=${data.length}');
-    // Try decoding with signature first, then without (signatures are not
-    // yet attached during the current development phase).
-    var packet = FluxonPacket.decode(data, hasSignature: true);
-    packet ??= FluxonPacket.decode(data, hasSignature: false);
+  Future<void> _handleIncomingData(
+    Uint8List data, {
+    required String fromDeviceId,
+  }) async {
+    _log('Handling incoming data from $fromDeviceId, len=${data.length}');
+
+    // Try Noise decryption first if a session is established
+    Uint8List packetData = data;
+    if (_noiseSessionManager.hasSession(fromDeviceId)) {
+      final decrypted = _noiseSessionManager.decrypt(data, fromDeviceId);
+      if (decrypted != null) {
+        packetData = decrypted;
+        _log('Decrypted packet from $fromDeviceId');
+      } else {
+        // Decryption failed — only allow valid plaintext packets through
+        // (broadcasts and handshakes are sent unencrypted even between
+        // peers with established Noise sessions).
+        final probe = FluxonPacket.decode(data, hasSignature: true) ??
+            FluxonPacket.decode(data, hasSignature: false);
+        if (probe != null) {
+          packetData = data;
+          _log('Decryption failed for $fromDeviceId, valid plaintext packet (type=${probe.type})');
+        } else {
+          // Not a valid plaintext packet either — likely corrupted or
+          // a Noise-encrypted packet that failed decryption. Drop it.
+          _log('Decryption failed for $fromDeviceId, invalid packet, dropping');
+          return;
+        }
+      }
+    }
+
+    // Try decoding with signature first, then without
+    var packet = FluxonPacket.decode(packetData, hasSignature: true);
+    packet ??= FluxonPacket.decode(packetData, hasSignature: false);
     if (packet == null) {
-      _log('Failed to decode packet (tried with and without signature)');
+      _log('Failed to decode packet from $fromDeviceId');
       return;
     }
 
+    // Handle Noise handshake packets specially
+    if (packet.type == MessageType.handshake) {
+      await _handleHandshakePacket(fromDeviceId, packet);
+      return; // Don't emit handshake packets to app layer
+    }
+
+    // Check for duplicates
     if (_deduplicator.isDuplicate(packet.packetId)) {
       _log('Duplicate packet, ignoring');
       return;
     }
 
-    _log('Valid packet received from ${packet.sourceId}');
+    _log('Valid packet received from ${HexUtils.encode(packet.sourceId)}');
     _packetController.add(packet);
+  }
+
+  Future<void> _handleHandshakePacket(
+    String fromDeviceId,
+    FluxonPacket packet,
+  ) async {
+    _log('Processing Noise handshake from $fromDeviceId');
+
+    final responseAndKey = _noiseSessionManager.processHandshakeMessage(
+      fromDeviceId,
+      packet.payload,
+    );
+
+    // If we got a response, send it back
+    if (responseAndKey.response != null) {
+      final responsePacket = BinaryProtocol.buildPacket(
+        type: MessageType.handshake,
+        sourceId: _myPeerId,
+        payload: responseAndKey.response!,
+        ttl: 1,
+      );
+
+      final responseData = responsePacket.encodeWithSignature();
+
+      // Send back via the same device
+      final char = _peerCharacteristics[fromDeviceId];
+      if (char != null) {
+        try {
+          await char.write(responseData, withoutResponse: true);
+          _log('Sent handshake response to $fromDeviceId');
+        } catch (e) {
+          _log('ERROR: Failed to send handshake response: $e');
+        }
+      }
+    }
+
+    // If handshake is complete, update peer connection
+    if (responseAndKey.remotePubKey != null) {
+      final remotePeerIdBytes = KeyGenerator.derivePeerId(
+        responseAndKey.remotePubKey!,
+      );
+      final remotePeerIdHex = HexUtils.encode(remotePeerIdBytes);
+
+      _deviceToPeerHex[fromDeviceId] = remotePeerIdHex;
+      _peerHexToDevice[remotePeerIdHex] = fromDeviceId;
+
+      // Update the peer connection with the real peer ID and signing key
+      final existingConnection = _peerConnections[fromDeviceId];
+      if (existingConnection != null) {
+        _peerConnections[fromDeviceId] = PeerConnection(
+          peerId: remotePeerIdBytes,
+          rssi: existingConnection.rssi,
+          signingPublicKey: responseAndKey.remoteSigningPublicKey,
+        );
+      }
+
+      _log('Handshake complete with $fromDeviceId, peer ID = $remotePeerIdHex');
+      _emitPeerUpdate();
+    }
+  }
+
+  Future<void> _initiateNoiseHandshake(String deviceId) async {
+    try {
+      final message1 = _noiseSessionManager.startHandshake(deviceId);
+      final handshakePacket = BinaryProtocol.buildPacket(
+        type: MessageType.handshake,
+        sourceId: _myPeerId,
+        payload: message1,
+        ttl: 1, // Never relay handshakes
+      );
+
+      final char = _peerCharacteristics[deviceId];
+      if (char == null) {
+        _log('ERROR: Cannot initiate handshake — no characteristic for $deviceId');
+        return;
+      }
+
+      final data = handshakePacket.encodeWithSignature();
+      await char.write(data, withoutResponse: true);
+      _log('Initiated Noise handshake with $deviceId (message 1 sent)');
+    } catch (e) {
+      _log('ERROR: Failed to initiate Noise handshake with $deviceId: $e');
+    }
   }
 
   void _emitPeerUpdate() {

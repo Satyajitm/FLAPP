@@ -8,6 +8,7 @@ import 'core/crypto/sodium_instance.dart';
 import 'core/identity/group_manager.dart';
 import 'core/identity/identity_manager.dart';
 import 'core/providers/group_providers.dart';
+import 'core/mesh/mesh_service.dart';
 import 'core/transport/ble_transport.dart';
 import 'core/transport/stub_transport.dart';
 import 'core/transport/transport.dart';
@@ -32,12 +33,22 @@ Future<void> main() async {
   final myPeerIdBytes = myPeerId.bytes;
 
   // Use BleTransport on Android/iOS, StubTransport elsewhere
-  final Transport transport;
+  final Transport rawTransport;
   if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
-    transport = BleTransport(myPeerId: myPeerIdBytes);
+    rawTransport = BleTransport(
+      myPeerId: myPeerIdBytes,
+      identityManager: identityManager,
+    );
   } else {
-    transport = StubTransport(myPeerId: myPeerIdBytes);
+    rawTransport = StubTransport(myPeerId: myPeerIdBytes);
   }
+
+  // Wrap with MeshService for multi-hop relay, topology tracking, and gossip
+  final transport = MeshService(
+    transport: rawTransport,
+    myPeerId: myPeerIdBytes,
+    identityManager: identityManager,
+  );
 
   // Launch the UI immediately, then start BLE in the background.
   // This ensures the Flutter engine is running before askBlePermission()

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/identity/peer_id.dart';
 import 'chat_providers.dart';
 import 'message_model.dart';
 
@@ -27,6 +28,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     if (text.isEmpty) return;
     _textController.clear();
     ref.read(chatControllerProvider.notifier).sendMessage(text);
+  }
+
+  void _showPeerPicker() {
+    showModalBottomSheet(
+      context: context,
+      builder: (ctx) => _PeerPickerSheet(
+        onPeerSelected: (peer) {
+          Navigator.of(ctx).pop();
+          ref.read(chatControllerProvider.notifier).selectPeer(peer);
+        },
+      ),
+    );
   }
 
   void _scrollToBottom() {
@@ -109,13 +122,19 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     },
                   ),
           ),
-          _buildInputBar(chatState.isSending),
+          _buildInputBar(
+            isSending: chatState.isSending,
+            selectedPeer: chatState.selectedPeer,
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildInputBar(bool isSending) {
+  Widget _buildInputBar({
+    required bool isSending,
+    required PeerId? selectedPeer,
+  }) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
       decoration: BoxDecoration(
@@ -128,29 +147,85 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ),
         ],
       ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (selectedPeer != null) _buildPeerSelector(selectedPeer),
+          Row(
+            children: [
+              IconButton(
+                icon: Icon(
+                  Icons.person_add,
+                  color: selectedPeer != null
+                      ? Theme.of(context).colorScheme.primary
+                      : null,
+                ),
+                tooltip: 'Send private message',
+                onPressed: _showPeerPicker,
+              ),
+              Expanded(
+                child: TextField(
+                  controller: _textController,
+                  decoration: InputDecoration(
+                    hintText: selectedPeer != null
+                        ? 'Private message...'
+                        : 'Type a message...',
+                    border: const OutlineInputBorder(),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                  ),
+                  onSubmitted: (_) => _sendMessage(),
+                ),
+              ),
+              const SizedBox(width: 8),
+              IconButton(
+                icon: isSending
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.send),
+                onPressed: isSending ? null : _sendMessage,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPeerSelector(PeerId selectedPeer) {
+    return Container(
+      padding: const EdgeInsets.only(bottom: 8),
       child: Row(
         children: [
+          Icon(Icons.lock, size: 16, color: Theme.of(context).colorScheme.primary),
+          const SizedBox(width: 8),
           Expanded(
-            child: TextField(
-              controller: _textController,
-              decoration: const InputDecoration(
-                hintText: 'Type a message...',
-                border: OutlineInputBorder(),
-                contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: Text(
+              'Private to ${selectedPeer.shortId}',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+                color: Theme.of(context).colorScheme.primary,
               ),
-              onSubmitted: (_) => _sendMessage(),
+              overflow: TextOverflow.ellipsis,
             ),
           ),
-          const SizedBox(width: 8),
-          IconButton(
-            icon: isSending
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.send),
-            onPressed: isSending ? null : _sendMessage,
+          const SizedBox(width: 4),
+          SizedBox(
+            width: 24,
+            height: 24,
+            child: IconButton(
+              padding: EdgeInsets.zero,
+              icon: const Icon(Icons.close, size: 16),
+              onPressed: () {
+                ref.read(chatControllerProvider.notifier).selectPeer(null);
+              },
+            ),
           ),
         ],
       ),
@@ -214,5 +289,72 @@ class _MessageBubble extends StatelessWidget {
 
   String _formatTime(DateTime dt) {
     return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+  }
+}
+
+/// Bottom sheet for selecting a peer for private messaging.
+class _PeerPickerSheet extends ConsumerWidget {
+  final Function(PeerId) onPeerSelected;
+
+  const _PeerPickerSheet({required this.onPeerSelected});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final transport = ref.watch(transportProvider);
+    final connectedPeersAsyncValue = ref.watch(
+      StreamProvider((ref) => transport.connectedPeers),
+    );
+
+    return SafeArea(
+      child: SingleChildScrollView(
+        child: connectedPeersAsyncValue.when(
+          data: (peers) {
+            if (peers.isEmpty) {
+              return Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(
+                  'No connected peers.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.grey[600]),
+                ),
+              );
+            }
+
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Text(
+                    'Select a peer for private message',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ),
+                ...peers.map(
+                  (peer) => ListTile(
+                    leading: const Icon(Icons.person),
+                    title: Text(
+                      PeerId(peer.peerId).shortId,
+                      style: const TextStyle(fontFamily: 'monospace'),
+                    ),
+                    subtitle: Text('RSSI: ${peer.rssi}'),
+                    onTap: () => onPeerSelected(PeerId(peer.peerId)),
+                  ),
+                ),
+                const SizedBox(height: 16),
+              ],
+            );
+          },
+          loading: () => const Padding(
+            padding: EdgeInsets.all(16),
+            child: CircularProgressIndicator(),
+          ),
+          error: (err, stack) => Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text('Error loading peers: $err'),
+          ),
+        ),
+      ),
+    );
   }
 }

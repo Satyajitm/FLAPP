@@ -10,6 +10,8 @@ class IdentityManager {
 
   Uint8List? _staticPrivateKey;
   Uint8List? _staticPublicKey;
+  Uint8List? _signingPrivateKey;
+  Uint8List? _signingPublicKey;
   PeerId? _myPeerId;
 
   /// Set of trusted peer IDs (peers we've completed handshakes with).
@@ -18,12 +20,16 @@ class IdentityManager {
   IdentityManager({KeyManager? keyManager})
       : _keyManager = keyManager ?? KeyManager();
 
-  /// Initialize the identity (loads or creates static key pair).
+  /// Initialize the identity (loads or creates static and signing key pairs).
   Future<void> initialize() async {
     final keyPair = await _keyManager.getOrCreateStaticKeyPair();
     _staticPrivateKey = keyPair.privateKey;
     _staticPublicKey = keyPair.publicKey;
     _myPeerId = PeerId(_keyManager.derivePeerId(_staticPublicKey!));
+
+    final signingKeyPair = await _keyManager.getOrCreateSigningKeyPair();
+    _signingPrivateKey = signingKeyPair.privateKey;
+    _signingPublicKey = signingKeyPair.publicKey;
   }
 
   /// This device's peer ID.
@@ -42,6 +48,18 @@ class IdentityManager {
   Uint8List get privateKey {
     if (_staticPrivateKey == null) throw StateError('IdentityManager not initialized');
     return _staticPrivateKey!;
+  }
+
+  /// This device's Ed25519 signing private key (64 bytes).
+  Uint8List get signingPrivateKey {
+    if (_signingPrivateKey == null) throw StateError('IdentityManager not initialized');
+    return _signingPrivateKey!;
+  }
+
+  /// This device's Ed25519 signing public key (32 bytes).
+  Uint8List get signingPublicKey {
+    if (_signingPublicKey == null) throw StateError('IdentityManager not initialized');
+    return _signingPublicKey!;
   }
 
   /// Mark a peer as trusted (after successful handshake).
@@ -63,8 +81,11 @@ class IdentityManager {
   /// Reset identity (deletes keys and trust).
   Future<void> resetIdentity() async {
     await _keyManager.deleteStaticKeyPair();
+    await _keyManager.deleteSigningKeyPair();
     _staticPrivateKey = null;
     _staticPublicKey = null;
+    _signingPrivateKey = null;
+    _signingPublicKey = null;
     _myPeerId = null;
     _trustedPeers.clear();
   }

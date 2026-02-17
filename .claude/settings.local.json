@@ -17,7 +17,9 @@
       "mcp__plugin_playwright_playwright__browser_evaluate",
       "Bash(netstat:*)",
       "Bash(flutter --version:*)",
-      "Bash(flutter devices:*)"
+      "Bash(flutter devices:*)",
+      "Bash(adb:*)",
+      "Bash(dart analyze:*)"
     ]
   }
 }

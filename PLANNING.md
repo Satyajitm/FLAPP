@@ -1,6 +1,6 @@
 # FluxonApp — Development Planning Document
 
-> **Status:** Phase 1.5 complete — all wiring gaps bridged (sodium init, group persistence, screen→controller wiring, group encryption for chat+emergency), 181 unit tests passing, zero compile errors. Phase 1 field test with two phones still pending.
+> **Status:** Phase 2 complete — multi-hop mesh relay via MeshService, topology tracking, discovery announces, gossip sync wired in. 315 unit tests passing, zero compile errors. Phase 1 field test with two phones and Phase 2 field test with three phones still pending.
 > **Last updated:** February 2026
 > **Reference:** See `Technical/Phone_to_Phone_Mesh_Analysis.md` for the full Bitchat analysis this is based on.
 
@@ -139,11 +139,16 @@ FluxonApp/
 │
 └── test/
     ├── core/
-    │   ├── packet_test.dart             ← Encode/decode round-trip, all message types
-    │   ├── relay_controller_test.dart   ← Relay decisions for all TTL/degree combinations
-    │   ├── topology_test.dart           ← BFS routing, two-way edge verification, stale pruning
-    │   ├── deduplicator_test.dart       ← LRU eviction, time expiry, thread safety
-    │   └── noise_test.dart              ← Full XX handshake, encrypt/decrypt, replay rejection
+    │   ├── packet_test.dart                    ← Encode/decode round-trip, all message types
+    │   ├── relay_controller_test.dart          ← Relay decisions for all TTL/degree combinations
+    │   ├── topology_test.dart                  ← BFS routing, two-way edge verification, stale pruning
+    │   ├── deduplicator_test.dart              ← LRU eviction, time expiry, thread safety
+    │   ├── noise_test.dart                     ← Full XX handshake, encrypt/decrypt, replay rejection
+    │   ├── gossip_sync_test.dart               ← Gossip sync: packet tracking, sync requests, capacity
+    │   ├── mesh_service_test.dart              ← MeshService: forwarding, relay, topology, lifecycle
+    │   ├── mesh_relay_integration_test.dart    ← 3-phone A—B—C relay simulation
+    │   ├── binary_protocol_discovery_test.dart ← Discovery codec round-trip and edge cases
+    │   └── stub_transport_test.dart            ← StubTransport: loopback, capture, peer simulation
     └── features/
         ├── location_test.dart           ← Location model serialisation
         └── group_test.dart              ← Passphrase → group key derivation
@@ -504,34 +509,105 @@ android.permission.FOREGROUND_SERVICE       (for background mesh relay)
 
 ---
 
-### Phase 2 — Multi-Hop Mesh (3+ phones)
+### Phase 2 — Multi-Hop Mesh (3+ phones) ✅ Complete
 
 **Goal:** A message originating on Phone A reaches Phone C even when A and C are not directly in BLE range, relayed through Phone B.
 
-**What needs building:**
-- [ ] Wire `RelayController` into `BleTransport`: on receiving a packet from a peer, call `RelayController.decide()` and re-broadcast with decremented TTL after the jitter delay
-- [ ] Wire `TopologyTracker`: send periodic `topologyAnnounce` packets so each phone knows the graph; use BFS routing for directed messages
-- [ ] `discovery` packet (`MessageType.discovery`): broadcasts `myPeerId` + neighbor list so the mesh can self-map
-- [ ] Announce on connect: when a new BLE peer is discovered, immediately send a `discovery` packet so they know we're here
-- [ ] Fragment reassembly: split packets > MTU into fragments, reassemble on receipt
+**What was implemented:**
+
+#### MeshService — Relay Orchestrator (core of Phase 2)
+- [x] Created `lib/core/mesh/mesh_service.dart` — implements `Transport` interface, wraps raw `BleTransport` as a drop-in replacement. Zero changes needed to any repository, controller, or UI code
+- [x] Wired `RelayController.decide()` into `MeshService._maybeRelay()`: on receiving a packet, decides whether to relay based on TTL, sender identity, message type, and node degree. Re-broadcasts with decremented TTL after jitter delay
+- [x] Wired `TopologyTracker`: processes incoming `discovery` and `topologyAnnounce` packets to update mesh graph. Periodic `topologyAnnounce` every 15s, topology prune every 60s
+- [x] Wired `GossipSyncManager`: feeds all incoming packets to gossip sync for gap-filling bookkeeping
+- [x] `discovery` packet on connect: when new BLE peers connect, immediately broadcasts `discovery` packet with `myPeerId` + neighbor list
+- [x] Application-layer packet filtering: only chat, location, emergency, handshake packets emitted to app stream; mesh-internal packets (discovery, topologyAnnounce) consumed silently
+
+#### Discovery/Topology Codec
+- [x] Added `encodeDiscoveryPayload` / `decodeDiscoveryPayload` + `DiscoveryPayload` class to `binary_protocol.dart`
+- [x] Format: `[neighborCount:1][neighbor1:32][neighbor2:32]...` — sender's peerId is in packet header (sourceId)
+
+#### StubTransport Enhancements
+- [x] Added `broadcastedPackets` list — captures all broadcasts for test assertions
+- [x] Added `sentPackets` list — captures targeted sends as `(packet, peerId)` tuples
+- [x] Added `simulatePeersChanged()` — fires `connectedPeers` stream for testing
+
+#### main.dart Wiring
+- [x] `main.dart` wraps raw transport with `MeshService`: `final transport = MeshService(transport: rawTransport, myPeerId: myPeerIdBytes)`
+- [x] `transportProvider.overrideWithValue(transport)` now gets MeshService (which IS-A Transport)
+
+#### MTU Negotiation
+- [x] Added `await result.device.requestMtu(512)` in `ble_transport.dart` after BLE connection, before service discovery
+- [x] Fragment reassembly deferred — MTU 512 handles typical payloads (header 78 + payload ~200 + signature 64 = ~342 bytes)
+
+#### Tests (65 new tests added, 315 total)
+- [x] `test/core/gossip_sync_test.dart` — 15 tests: onPacketSeen, handleSyncRequest, knownPacketIds, reset, start/stop, GossipSyncConfig
+- [x] `test/core/mesh_service_test.dart` — expanded to 28 tests: packet forwarding, relay logic, lifecycle, topology, Transport delegation, edge cases
+- [x] `test/core/mesh_relay_integration_test.dart` — 4 tests: 3-phone A—B—C relay simulation
+- [x] `test/core/binary_protocol_discovery_test.dart` — expanded to 11 tests: round-trip, edge cases, max neighbors
+- [x] `test/core/stub_transport_test.dart` — expanded with 10 tests: broadcastedPackets, sentPackets, simulatePeersChanged
+- [x] `test/core/topology_test.dart` — expanded with 12 tests: removePeer, maxHops, overwrite, sanitize, 3-hop route
+- [x] `test/core/relay_controller_test.dart` — expanded with 10 tests: TTL=0, clamping, degree bands, topologyAnnounce TTL
+
+#### Files changed summary
+
+| Action | File |
+|--------|------|
+| **Created** | `lib/core/mesh/mesh_service.dart` |
+| **Created** | `test/core/gossip_sync_test.dart` |
+| **Created** | `test/core/mesh_service_test.dart` |
+| **Created** | `test/core/mesh_relay_integration_test.dart` |
+| **Created** | `test/core/binary_protocol_discovery_test.dart` |
+| Modified | `lib/core/protocol/binary_protocol.dart` (discovery codecs) |
+| Modified | `lib/core/transport/stub_transport.dart` (packet capture + peer simulation) |
+| Modified | `lib/core/transport/ble_transport.dart` (MTU negotiation) |
+| Modified | `lib/main.dart` (MeshService wiring) |
+| Modified | `test/core/stub_transport_test.dart` (Phase 2 feature tests) |
+| Modified | `test/core/topology_test.dart` (gap tests) |
+| Modified | `test/core/relay_controller_test.dart` (edge case tests) |
+
+**Remaining for Phase 2:**
+- [ ] Fragment reassembly — only needed if real devices default to 20-byte MTU instead of negotiated 512
+- [ ] Fix BLE `PeerConnection` all-zeros peerId: `BleTransport` creates `PeerConnection(peerId: Uint8List(32))` at line 332 — needs discovery handshake to map BLE device ID to real peerId
 - [ ] Field test: 3 phones in a line (A—B—C), A sends message, C receives it via B
 
 ---
 
-### Phase 3 — Encryption (Noise XX + Group Keys)
+### Phase 3 — Encryption (Noise XX + Group Keys) — In Progress
 
 **Goal:** Messages are end-to-end encrypted. Eavesdroppers with BLE sniffers see only ciphertext.
 
-**What needs building:**
+**What has been completed:**
 - [x] `SodiumInit.init()` called in `main.dart` before transport starts *(done in Phase 1.5 — `initSodium()` in `sodium_instance.dart`)*
 - [x] `keys.dart` — generate persistent Curve25519 + Ed25519 keypairs, store in `flutter_secure_storage`, derive `PeerId` as SHA-256 of static public key *(code existed, sodium API bugs fixed in Phase 1.5)*
-- [ ] `noise_protocol.dart` — Noise XX handshake (`Noise_XX_25519_ChaChaPoly_SHA256`) triggered on peer connect *(code exists but not wired into BleTransport yet)*
-- [ ] `noise_session.dart` — per-peer session state (send/receive cipher states after handshake) *(code exists but not wired)*
-- [ ] `signatures.dart` — Ed25519 detached signature on every outgoing packet; verify on every incoming packet *(code exists but not wired)*
-- [ ] Chat messages encrypted via Noise session (currently group-encrypted, not per-peer Noise-encrypted)
+- [x] `noise_protocol.dart` — Noise XX handshake (`Noise_XX_25519_ChaChaPoly_SHA256`) implementation complete and tested *(code exists and fully tested)*
+- [x] `noise_session.dart` — per-peer session state (send/receive cipher states after handshake) *(code exists and tested)*
+- [x] `signatures.dart` — Ed25519 detached signature on every outgoing packet; verify NOT YET implemented due to key distribution gap *(code exists and tested for signing only)*
 - [x] `group_manager.dart` — passphrase → Argon2id → 32-byte group key; group key encrypts `locationUpdate`, `emergencyAlert`, **and `chat`** payloads *(done in Phase 1.5)*
 - [x] Create/join group screens wired to `GroupManager` *(done in Phase 1.5)*
-- [ ] Field test: two phones with the same group passphrase can read location + SOS; a third phone (different passphrase) cannot
+- [x] **Comprehensive Test Suite Added** (79 tests across 5 files): full test coverage of Noise, signing, handshake flows *(in Phase 1.5)*
+- [x] **Wire Noise XX handshake into `BleTransport`** — `_initiateNoiseHandshake()` called on peer connect (line 374), manages per-device handshake state, all 3 messages handled, `NoiseSession` established on completion
+- [x] **Wire Ed25519 signing into outgoing packets** — `MeshService.sendPacket()` and `broadcastPacket()` sign every packet (lines 98–111)
+- [x] **Noise session encryption on unicast sends** — `BleTransport.sendPacket()` encrypts via `_noiseSessionManager.encrypt()` (lines 424–428)
+- [x] **Noise session decryption on incoming data** — `BleTransport._handleIncomingData()` decrypts via `_noiseSessionManager.decrypt()` (lines 480–483)
+
+**What needs to be completed:**
+- [ ] **Phase 2 carry-over bug:** All-zeros peerId emission — `BleTransport._emitPeerUpdate()` called pre-handshake at line 371 with placeholder, should be removed. Causes phantom topology nodes and duplicate discovery announces. *(FIX: remove line 371)*
+- [ ] **Wire Ed25519 verification into incoming packets** — `MeshService._onPacketReceived()` detects signature but skips verification (TODO line 171). Root cause: no signing public key distribution mechanism. *(FIX: distribute signing keys via Noise handshake payload; store in `PeerConnection.signingPublicKey`; verify in `MeshService._onPacketReceived`)*
+- [ ] **Signing key distribution mechanism** — Ed25519 signing key not transmitted. After Noise handshake, only Noise static key (X25519) is known. Include signing key as AEAD-encrypted payload in handshake messages 2 & 3 (authenticated via DH chain).
+  - [ ] Modify `NoiseSessionManager.processHandshakeMessage` to include signing key in message payloads
+  - [ ] Update `BleTransport._handleHandshakePacket` to extract and store signing key on `PeerConnection`
+  - [ ] Update `MeshService._onPeersChanged` to cache signing keys
+  - [ ] Implement signature verification in `MeshService._onPacketReceived`
+- [ ] **Private chat via Noise session** — `noiseEncrypted` packet type exists but is not wired to feature layer. `MeshChatRepository` only sends `MessageType.chat` broadcasts; controller has no recipient concept.
+  - [ ] Add `sendPrivateMessage` to `ChatRepository` abstract interface
+  - [ ] Implement in `MeshChatRepository` using `MessageType.noiseEncrypted` with `destId` set
+  - [ ] Handle incoming `noiseEncrypted` packets (skip group-key decrypt, already Noise-decrypted by transport)
+  - [ ] Add `selectedPeer` to `ChatController` state and route `sendMessage` appropriately
+  - [ ] Add peer selector UI to `ChatScreen` (connected peers picker)
+- [ ] **Add tests for signing key distribution and private chat** — 3 new test files with 15+ tests total
+- [ ] **Field test:** two phones with the same group passphrase can read location + SOS; a third phone (different passphrase) cannot
+- [ ] **Field test:** Noise XX handshake completes successfully between two phones, encrypted messages verified
 
 ---
 

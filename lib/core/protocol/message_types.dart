@@ -27,20 +27,23 @@ enum MessageType {
   /// Peer discovery broadcast
   discovery(0x08),
 
+  /// Direct message encrypted via Noise session (private message)
+  noiseEncrypted(0x09),
+
   /// Location update (Fluxonlink-specific)
-  locationUpdate(0x09),
+  locationUpdate(0x0A),
 
   /// Group join request
-  groupJoin(0x0A),
+  groupJoin(0x0B),
 
   /// Group join response
-  groupJoinResponse(0x0B),
+  groupJoinResponse(0x0C),
 
   /// Group key rotation
-  groupKeyRotation(0x0C),
+  groupKeyRotation(0x0D),
 
   /// Emergency alert (Fluxonlink-specific)
-  emergencyAlert(0x0D);
+  emergencyAlert(0x0E);
 
   const MessageType(this.value);
   final int value;

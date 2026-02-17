@@ -15,6 +15,12 @@ class StubTransport extends Transport {
   final _peersController = StreamController<List<PeerConnection>>.broadcast();
   bool _running = false;
 
+  /// All packets passed to [broadcastPacket] (for test assertions).
+  final List<FluxonPacket> broadcastedPackets = [];
+
+  /// All packets passed to [sendPacket] as (packet, peerId) pairs.
+  final List<(FluxonPacket, Uint8List)> sentPackets = [];
+
   StubTransport({
     required Uint8List myPeerId,
     this.loopback = false,
@@ -44,6 +50,7 @@ class StubTransport extends Transport {
 
   @override
   Future<bool> sendPacket(FluxonPacket packet, Uint8List peerId) async {
+    sentPackets.add((packet, peerId));
     if (loopback) {
       _packetController.add(packet);
     }
@@ -52,6 +59,7 @@ class StubTransport extends Transport {
 
   @override
   Future<void> broadcastPacket(FluxonPacket packet) async {
+    broadcastedPackets.add(packet);
     if (loopback) {
       _packetController.add(packet);
     }
@@ -60,6 +68,11 @@ class StubTransport extends Transport {
   /// Inject a packet as if it arrived from a remote peer.
   void simulateIncomingPacket(FluxonPacket packet) {
     _packetController.add(packet);
+  }
+
+  /// Simulate a peer connection change.
+  void simulatePeersChanged(List<PeerConnection> peers) {
+    _peersController.add(peers);
   }
 
   void dispose() {

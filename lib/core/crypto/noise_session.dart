@@ -49,8 +49,9 @@ class NoiseSession {
 
   /// Decrypt a message from the remote peer.
   Uint8List decrypt(Uint8List ciphertext) {
+    final plaintext = _receiveCipher.decrypt(ciphertext);
     _messagesReceived++;
-    return _receiveCipher.decrypt(ciphertext);
+    return plaintext;
   }
 
   /// Whether this session should be re-keyed.
