@@ -27,10 +27,11 @@ class _CreateGroupScreenState extends ConsumerState<CreateGroupScreen> {
     final passphrase = _passphraseController.text.trim();
     if (passphrase.isEmpty) return;
 
-    ref.read(groupManagerProvider).createGroup(
+    final group = ref.read(groupManagerProvider).createGroup(
       passphrase,
       groupName: name.isEmpty ? null : name,
     );
+    ref.read(activeGroupProvider.notifier).state = group;
     Navigator.of(context).pop();
   }
 

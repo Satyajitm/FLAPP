@@ -5,6 +5,103 @@ Each entry records **what** changed, **which files** were affected, and **why** 
 
 ---
 
+## [v2.2] — Bug Fixes: Map + Reactive Group State
+**Date:** 2026-02-18
+**Branch:** `v2`
+
+### Summary
+Fixed three bugs: blank map canvas (missing INTERNET permission + null tile provider fallback), user's own location pin not appearing on the map, and the "Join your group" screen persisting after creating/joining a group (non-reactive GroupManager state).
+
+---
+
+### Changes
+
+#### 1. INTERNET Permission — `android/app/src/main/AndroidManifest.xml`
+
+**What changed:**
+- Added `<uses-permission android:name="android.permission.INTERNET" />`
+
+**Why:**
+OpenStreetMap tiles are fetched over HTTPS. Without this permission, Android silently blocks all network requests, resulting in a blank map canvas.
+
+---
+
+#### 2. Tile Provider Fallback — `lib/features/location/location_screen.dart`
+
+**What changed:**
+- `TileLayer.tileProvider` now uses `_tileProvider ?? NetworkTileProvider()` instead of passing `_tileProvider` directly
+- When the async disk cache (`CachedTileProvider`) hasn't initialized yet or fails silently, tiles are still fetched via the network
+
+**Why:**
+Passing `null` to `tileProvider` does not trigger a fallback — it disables tile loading entirely. On first render `_tileProvider` is always `null` (async init), so tiles never appeared.
+
+---
+
+#### 3. Own Location Pin — `lib/features/location/location_screen.dart`
+
+**What changed:**
+- `_buildMarkers()` now includes the user's own location (`myLocation`) as a green `Icons.my_location` marker, in addition to group members' blue `Icons.person_pin_circle` markers
+
+**Why:**
+`myLocation` was stored in a separate field from `memberLocations` but was never rendered on the map.
+
+---
+
+#### 4. Default Map Center — `lib/features/location/location_screen.dart`
+
+**What changed:**
+- `MapOptions.initialCenter` changed from `LatLng(0, 0)` to `LatLng(20.5937, 78.9629)` (India)
+- `MapOptions.initialZoom` changed from `15` to `5`
+
+**Why:**
+`LatLng(0, 0)` at zoom 15 shows open ocean (Gulf of Guinea). Centering on India at country-level zoom provides a meaningful initial view.
+
+---
+
+#### 5. Reactive Group State — `lib/core/providers/group_providers.dart`
+
+**What changed:**
+- Added `activeGroupProvider` — a `StateProvider<FluxonGroup?>` that tracks the currently active group reactively
+- Seeded from `GroupManager.activeGroup` (covers groups restored from storage on startup)
+
+**Why:**
+`GroupManager` is a plain Dart class. When `createGroup()` / `joinGroup()` / `leaveGroup()` mutated its internal `_activeGroup`, Riverpod had no way to detect the change, so `ChatScreen` never rebuilt — it stayed stuck on the "Join your group" page forever.
+
+---
+
+#### 6. Create/Join Screens Update Reactive State
+
+**Files:** `lib/features/group/create_group_screen.dart`, `lib/features/group/join_group_screen.dart`
+
+**What changed:**
+- After calling `groupManager.createGroup()` / `joinGroup()`, both screens now also set `ref.read(activeGroupProvider.notifier).state = group`
+
+**Why:**
+Bridges the gap between the imperative `GroupManager` mutation and Riverpod's reactive state system.
+
+---
+
+#### 7. Chat Screen Watches Reactive Provider — `lib/features/chat/chat_screen.dart`
+
+**What changed:**
+- `build()` now watches `activeGroupProvider` instead of reading `groupManager.activeGroup`
+- Leave Group action in the bottom sheet now clears `activeGroupProvider` in addition to calling `groupManager.leaveGroup()`
+- Removed unused `groupManager` local variable from `_showGroupMenu()`
+
+**Why:**
+Watching the reactive `StateProvider` ensures the UI rebuilds when group state changes (create, join, leave).
+
+---
+
+### What Did NOT Change
+- All of `lib/core/` (transport, mesh, crypto, Noise protocol, identity) — **unchanged**
+- `GroupManager`, `GroupCipher`, `GroupStorage` — **unchanged** (reactive wrapper added around them, not inside them)
+- Wire protocol, BLE UUIDs, packet format — **unchanged**
+- Chat, Location, Emergency repositories and controllers — **unchanged**
+- Onboarding, user profile — **unchanged**
+
+---
+
 ## [v2.1] — Phase 4 (continued): User Display Name + Onboarding
 **Date:** 2026-02-17
 **Branch:** `phase_4`

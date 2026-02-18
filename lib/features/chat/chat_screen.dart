@@ -50,7 +50,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (ctx) {
-        final groupManager = ref.read(groupManagerProvider);
         final displayName = ref.read(displayNameProvider);
         return SafeArea(
           child: Column(
@@ -111,13 +110,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   Navigator.of(context).pushNamed('/join-group');
                 },
               ),
-              if (groupManager.isInGroup)
+              if (ref.read(activeGroupProvider) != null)
                 ListTile(
                   leading: Icon(Icons.logout_outlined, color: Colors.red[400]),
                   title: Text('Leave Group', style: TextStyle(color: Colors.red[400])),
                   onTap: () {
                     Navigator.of(ctx).pop();
-                    groupManager.leaveGroup();
+                    ref.read(groupManagerProvider).leaveGroup();
+                    ref.read(activeGroupProvider.notifier).state = null;
                   },
                 ),
               const SizedBox(height: 8),
@@ -170,14 +170,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     final chatState = ref.watch(chatControllerProvider);
-    final groupManager = ref.watch(groupManagerProvider);
+    final group = ref.watch(activeGroupProvider);
     final messages = chatState.messages;
 
     if (messages.isNotEmpty) {
       _scrollToBottom();
     }
 
-    final group = groupManager.activeGroup;
     final memberCount = group?.members.length ?? 0;
 
     return Scaffold(

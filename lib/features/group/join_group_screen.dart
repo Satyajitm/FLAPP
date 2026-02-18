@@ -26,7 +26,8 @@ class _JoinGroupScreenState extends ConsumerState<JoinGroupScreen> {
     if (passphrase.isEmpty) return;
 
     setState(() => _isJoining = true);
-    ref.read(groupManagerProvider).joinGroup(passphrase);
+    final group = ref.read(groupManagerProvider).joinGroup(passphrase);
+    ref.read(activeGroupProvider.notifier).state = group;
     Navigator.of(context).pop();
   }
 

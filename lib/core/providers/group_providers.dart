@@ -10,3 +10,14 @@ final groupManagerProvider = Provider<GroupManager>((ref) {
     'instance after initialization.',
   );
 });
+
+/// Reactive provider that tracks the currently active [FluxonGroup].
+///
+/// [GroupManager] is a plain Dart class — mutations to its internal state
+/// don't trigger Riverpod rebuilds. This [StateProvider] bridges that gap:
+/// update it whenever the group changes (create, join, leave) so the UI
+/// rebuilds reactively.
+final activeGroupProvider = StateProvider<FluxonGroup?>((ref) {
+  final gm = ref.read(groupManagerProvider);
+  return gm.activeGroup;
+});

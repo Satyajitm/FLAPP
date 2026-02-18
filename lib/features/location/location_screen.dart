@@ -77,14 +77,14 @@ class _LocationScreenState extends ConsumerState<LocationScreen> {
       body: FlutterMap(
         mapController: _mapController,
         options: const MapOptions(
-          initialCenter: LatLng(0, 0),
-          initialZoom: 15,
+          initialCenter: LatLng(20.5937, 78.9629),
+          initialZoom: 5,
         ),
         children: [
           TileLayer(
             urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
             userAgentPackageName: 'com.fluxonlink.fluxon_app',
-            tileProvider: _tileProvider,
+            tileProvider: _tileProvider ?? NetworkTileProvider(),
           ),
           MarkerLayer(
             markers: _buildMarkers(),
@@ -99,9 +99,27 @@ class _LocationScreenState extends ConsumerState<LocationScreen> {
   }
 
   List<Marker> _buildMarkers() {
-    final memberLocations = ref.watch(locationControllerProvider).memberLocations;
-    return memberLocations.values.map((loc) {
-      return Marker(
+    final locationState = ref.watch(locationControllerProvider);
+    final markers = <Marker>[];
+
+    // My location pin (green)
+    final myLoc = locationState.myLocation;
+    if (myLoc != null) {
+      markers.add(Marker(
+        point: LatLng(myLoc.latitude, myLoc.longitude),
+        width: 40,
+        height: 40,
+        child: const Icon(
+          Icons.my_location,
+          color: Colors.green,
+          size: 40,
+        ),
+      ));
+    }
+
+    // Group members' pins (blue)
+    for (final loc in locationState.memberLocations.values) {
+      markers.add(Marker(
         point: LatLng(loc.latitude, loc.longitude),
         width: 40,
         height: 40,
@@ -110,8 +128,10 @@ class _LocationScreenState extends ConsumerState<LocationScreen> {
           color: Colors.blue,
           size: 40,
         ),
-      );
-    }).toList();
+      ));
+    }
+
+    return markers;
   }
 
   void _centerOnMe() {
