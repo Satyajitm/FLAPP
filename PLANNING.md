@@ -1,7 +1,7 @@
 # FluxonApp — Development Planning Document
 
-> **Status:** Phase 3 complete ✅ — End-to-end encryption implemented (Noise XX handshake + Ed25519 signature verification + private chat). 347 unit tests passing, zero compile errors. Private messaging with peer selection UI now functional. See [PHASE3_PROGRESS.md](PHASE3_PROGRESS.md) for detailed completion status.
-> **Last updated:** February 17, 2026
+> **Status:** Phase 4 complete ✅ — Background relay (Android foreground service + iOS background modes), duty-cycle BLE scan, offline map caching, UI redesign (group-only chat), user display names with onboarding, reactive group state. 39 test files, zero compile errors.
+> **Last updated:** February 19, 2026
 > **Reference:** See `Technical/Phone_to_Phone_Mesh_Analysis.md` for the full Bitchat analysis this is based on.
 
 ---
@@ -80,55 +80,70 @@ FluxonApp/
 │   │   │
 │   │   ├── transport/                   ← HOW data moves between devices
 │   │   │   ├── transport.dart           ← Abstract Transport interface
-│   │   │   ├── ble_transport.dart       ← BLE phone-to-phone implementation
-│   │   │   └── transport_config.dart    ← All tunable mesh parameters
+│   │   │   ├── ble_transport.dart       ← BLE phone-to-phone implementation (+ duty-cycle scan)
+│   │   │   └── transport_config.dart    ← All tunable mesh parameters (+ duty-cycle config)
 │   │   │
 │   │   ├── protocol/                    ← WHAT the data looks like on the wire
 │   │   │   ├── packet.dart              ← FluxonPacket binary structure
-│   │   │   ├── binary_protocol.dart     ← Encode / decode binary wire format
+│   │   │   ├── binary_protocol.dart     ← Encode / decode binary wire format (+ ChatPayload JSON)
 │   │   │   ├── message_types.dart       ← Enum of all packet types
 │   │   │   └── padding.dart             ← PKCS#7 padding for traffic analysis resistance
 │   │   │
 │   │   ├── mesh/                        ← HOW packets travel through the mesh
+│   │   │   ├── mesh_service.dart        ← Relay orchestrator (wraps Transport, wires relay+topology+gossip)
 │   │   │   ├── relay_controller.dart    ← Flood control (TTL, jitter, K-of-N fanout)
 │   │   │   ├── topology_tracker.dart    ← Mesh graph + BFS shortest-path routing
 │   │   │   ├── deduplicator.dart        ← LRU dedup cache (5 min / 1000 entries)
 │   │   │   └── gossip_sync.dart         ← GCS-filter self-healing sync
 │   │   │
 │   │   ├── crypto/                      ← HOW data is secured
+│   │   │   ├── sodium_instance.dart     ← Global SodiumSumo singleton (init once at startup)
 │   │   │   ├── noise_protocol.dart      ← Noise XX handshake (CipherState, SymmetricState, HandshakeState)
 │   │   │   ├── noise_session.dart       ← Per-peer session (send/receive cipher states)
 │   │   │   ├── keys.dart                ← Key generation + secure storage + PeerID derivation
 │   │   │   └── signatures.dart          ← Ed25519 packet signing and verification
 │   │   │
-│   │   └── identity/                    ← WHO is on the mesh
-│   │       ├── peer_id.dart             ← PeerID model (16-hex from SHA256 of Noise key)
-│   │       ├── identity_manager.dart    ← Cryptographic + social identity persistence
-│   │       └── group_manager.dart       ← Shared-passphrase group key derivation (Fluxonlink-specific)
+│   │   ├── identity/                    ← WHO is on the mesh
+│   │   │   ├── peer_id.dart             ← PeerID model (16-hex from SHA256 of Noise key)
+│   │   │   ├── identity_manager.dart    ← Cryptographic + social identity persistence
+│   │   │   ├── group_manager.dart       ← Shared-passphrase group key derivation (Fluxonlink-specific)
+│   │   │   ├── group_storage.dart       ← Persist group passphrase/name in flutter_secure_storage
+│   │   │   └── user_profile_manager.dart← User display name persistence
+│   │   │
+│   │   ├── providers/                   ← Cross-cutting Riverpod providers
+│   │   │   ├── profile_providers.dart   ← userProfileManagerProvider + displayNameProvider
+│   │   │   └── group_providers.dart     ← activeGroupProvider (reactive group state)
+│   │   │
+│   │   └── services/                    ← Platform services
+│   │       └── foreground_service_manager.dart ← Android foreground service for background relay
 │   │
 │   ├── features/                        ← User-facing product features
 │   │   │
+│   │   ├── onboarding/
+│   │   │   └── onboarding_screen.dart   ← First-run display name entry
+│   │   │
 │   │   ├── chat/
-│   │   │   ├── chat_screen.dart         ← Group chat UI + peer picker for private messages
-│   │   │   ├── chat_controller.dart     ← Message send/receive state + peer selection
-│   │   │   ├── message_model.dart       ← Chat message data model
-│   │   │   ├── chat_providers.dart      ← Riverpod providers
+│   │   │   ├── chat_screen.dart         ← Group chat UI (group menu, directional bubbles, display names)
+│   │   │   ├── chat_controller.dart     ← Message send/receive state (group broadcast only)
+│   │   │   ├── message_model.dart       ← Chat message data model (+ senderName field)
+│   │   │   ├── chat_providers.dart      ← Riverpod providers (+ display name injection)
 │   │   │   └── data/
-│   │   │       ├── chat_repository.dart ← Abstract interface (now includes sendPrivateMessage)
-│   │   │       └── mesh_chat_repository.dart ← Concrete implementation (Noise-encrypted private messages)
+│   │   │       ├── chat_repository.dart ← Abstract interface (includes sendPrivateMessage for protocol)
+│   │   │       └── mesh_chat_repository.dart ← Concrete implementation (group + Noise-encrypted)
 │   │   │
 │   │   ├── location/
-│   │   │   ├── location_screen.dart     ← Map showing group member positions
+│   │   │   ├── location_screen.dart     ← Map with offline tile caching + own location pin
 │   │   │   ├── location_controller.dart ← GPS polling + location broadcast scheduling
 │   │   │   └── location_model.dart      ← Location update data model
 │   │   │
 │   │   ├── emergency/
 │   │   │   ├── emergency_screen.dart    ← SOS trigger button + confirmation UI
-│   │   │   └── emergency_controller.dart← High-priority emergency broadcast logic
+│   │   │   ├── emergency_controller.dart← High-priority emergency broadcast logic
+│   │   │   └── emergency_providers.dart ← Emergency Riverpod providers
 │   │   │
 │   │   └── group/
-│   │       ├── create_group_screen.dart ← Create group, generate/display passphrase
-│   │       └── join_group_screen.dart   ← Enter passphrase to join existing group
+│   │       ├── create_group_screen.dart ← Create group (hero icon, passphrase visibility toggle)
+│   │       └── join_group_screen.dart   ← Join group (hero icon, loading state)
 │   │
 │   └── shared/                          ← Cross-cutting utilities
 │       ├── logger.dart                  ← Secure logging (no PII in logs)
@@ -136,10 +151,10 @@ FluxonApp/
 │       └── compression.dart             ← zlib compression for large payloads
 │
 ├── android/
-│   └── app/src/main/AndroidManifest.xml ← BLUETOOTH_SCAN, BLUETOOTH_ADVERTISE, BLUETOOTH_CONNECT, ACCESS_FINE_LOCATION permissions
+│   └── app/src/main/AndroidManifest.xml ← BLE + INTERNET + FOREGROUND_SERVICE permissions
 │
 ├── ios/
-│   └── Runner/Info.plist                ← NSBluetoothAlwaysUsageDescription, background modes (bluetooth-central, bluetooth-peripheral), NSLocationWhenInUseUsageDescription
+│   └── Runner/Info.plist                ← BLE background modes, location background, usage descriptions
 │
 └── test/
     ├── core/
@@ -150,12 +165,40 @@ FluxonApp/
     │   ├── noise_test.dart                     ← Full XX handshake, encrypt/decrypt, replay rejection
     │   ├── gossip_sync_test.dart               ← Gossip sync: packet tracking, sync requests, capacity
     │   ├── mesh_service_test.dart              ← MeshService: forwarding, relay, topology, lifecycle
+    │   ├── mesh_service_signing_test.dart      ← MeshService Ed25519 signing integration
     │   ├── mesh_relay_integration_test.dart    ← 3-phone A—B—C relay simulation
     │   ├── binary_protocol_discovery_test.dart ← Discovery codec round-trip and edge cases
-    │   └── stub_transport_test.dart            ← StubTransport: loopback, capture, peer simulation
-    └── features/
-        ├── location_test.dart           ← Location model serialisation
-        └── group_test.dart              ← Passphrase → group key derivation
+    │   ├── stub_transport_test.dart            ← StubTransport: loopback, capture, peer simulation
+    │   ├── ble_transport_handshake_test.dart   ← BLE Noise handshake integration
+    │   ├── ble_transport_logic_test.dart       ← BLE transport logic unit tests
+    │   ├── device_services_test.dart           ← Device service tests
+    │   ├── duty_cycle_test.dart                ← Idle detection + duty-cycle transitions
+    │   ├── e2e_noise_handshake_test.dart       ← End-to-end Noise handshake flow
+    │   ├── e2e_relay_encrypted_test.dart       ← End-to-end encrypted relay
+    │   ├── foreground_service_manager_test.dart← Foreground service lifecycle
+    │   ├── group_cipher_test.dart              ← Group encryption/decryption
+    │   ├── group_manager_test.dart             ← Group create/join/leave lifecycle
+    │   ├── group_storage_test.dart             ← Group persistence round-trip
+    │   ├── identity_manager_test.dart          ← Identity persistence + key derivation
+    │   ├── identity_signing_lifecycle_test.dart← Signing key lifecycle
+    │   ├── keys_test.dart                      ← Key generation + PeerID derivation
+    │   ├── noise_session_manager_test.dart     ← Noise session manager unit tests
+    │   └── packet_immutability_test.dart       ← Packet immutability guarantees
+    ├── features/
+    │   ├── app_lifecycle_test.dart       ← App lifecycle + foreground service integration
+    │   ├── chat_controller_test.dart     ← Chat controller (group broadcast, display name)
+    │   ├── chat_integration_test.dart    ← End-to-end loopback + two-peer simulation
+    │   ├── chat_repository_test.dart     ← Chat repository + ChatPayload decoding
+    │   ├── emergency_controller_test.dart← Emergency controller
+    │   ├── emergency_repository_test.dart← Emergency repository
+    │   ├── group_screens_test.dart       ← Create/Join group screen widget tests
+    │   ├── location_controller_test.dart ← Location controller
+    │   ├── location_screen_test.dart     ← Location screen widget test
+    │   ├── location_test.dart            ← Location model serialisation
+    │   └── mesh_location_repository_test.dart ← Location repository
+    ├── shared/
+    │   └── geo_math_test.dart            ← Geospatial math helpers
+    └── widget_test.dart                  ← Root widget smoke test
 ```
 
 ---
@@ -644,22 +687,122 @@ android.permission.FOREGROUND_SERVICE       (for background mesh relay)
 
 ---
 
-### Phase 4 — Polish, Persistence & Background (Future)
+### Phase 4 — Polish, Persistence & Background ✅ Mostly Complete
 
-**Already Implemented (Phase 1.5 & Phase 3):**
+**Goal:** Background relay, battery optimization, offline maps, UI polish, and user identity.
+
+**Already Implemented (Prior Phases):**
 - [x] Persist identity across restarts (`IdentityManager` stores keypairs permanently in `flutter_secure_storage`) *(done in Phase 1.5 — `IdentityManager.initialize()` called in `main.dart`)*
 - [x] Persist group membership across restarts (`GroupStorage` in `flutter_secure_storage`) *(done in Phase 1.5)*
 - [x] `GossipSync` — periodic GCS filter exchange for gap-filling missed messages *(fully implemented in Phase 2)*
 - [x] Signing key persistence via `flutter_secure_storage` *(done in Phase 3)*
 
-**Remaining for Phase 4:**
-- [ ] Android foreground service for background mesh relay (Notification + service keepalive)
-- [ ] iOS background modes (`bluetooth-central`, `bluetooth-peripheral`) in `Info.plist` + background task handler
-- [ ] Battery optimisation: duty-cycle BLE scan (5s on / 10s off when idle)
-- [ ] Offline map tile caching for `flutter_map` (MBTiles or SQLite)
-- [ ] Message persistence: SQLite database for chat/location history
+**What was implemented in Phase 4:**
+
+#### 4.1 — Android Foreground Service for Background Mesh Relay ✅
+- [x] Created `lib/core/services/foreground_service_manager.dart` — uses `flutter_foreground_task` v9.2.0
+- [x] `ForegroundServiceManager.initialize()` called in `main.dart` after `WidgetsFlutterBinding.ensureInitialized()`
+- [x] `ForegroundServiceManager.start()` starts service with persistent notification ("Fluxon Mesh Active — Relaying messages for your group")
+- [x] `ForegroundServiceManager.stop()` called only on `AppLifecycleState.detached` (not on pause — preserves relay when backgrounded)
+- [x] Configured with `allowWakeLock: true` to keep CPU alive for packet relay
+- [x] No-op on iOS/desktop (platform-specific)
+- [x] `WithForegroundTask` wrapper around `MaterialApp` in `app.dart`
+- [x] `_HomeScreen` implements `WidgetsBindingObserver` for lifecycle tracking
+- [x] Android permissions added: `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_CONNECTED_DEVICE`, foreground service type `connectedDevice`
+
+#### 4.2 — iOS Background Modes ✅
+- [x] `ios/Runner/Info.plist` configured with `UIBackgroundModes`: `bluetooth-central`, `bluetooth-peripheral`, `location`
+- [x] `NSBluetoothAlwaysUsageDescription` and `NSBluetoothPeripheralUsageDescription` added
+- [x] `NSLocationWhenInUseUsageDescription` and `NSLocationAlwaysAndWhenInUseUsageDescription` added
+
+#### 4.3 — Battery Optimization: Duty-Cycle BLE Scan ✅
+- [x] Idle detection in `BleTransport`: monitors `_lastActivityTimestamp`, switches to duty-cycle mode after 30s inactivity
+- [x] Duty-cycle parameters in `TransportConfig`: `dutyCycleScanOnMs = 5000` (5s ON), `dutyCycleScanOffMs = 10000` (10s OFF), `idleThresholdSeconds = 30`
+- [x] `_idleCheckTimer` fires every 1s; `_enterIdleMode()` triggers `_cycleDutyScan()` ON→OFF cycles
+- [x] Activity tracking: `_lastActivityTimestamp` updated on every packet send/receive
+- [x] Auto-exits idle mode when activity detected
+
+#### 4.4 — Offline Map Tile Caching ✅
+- [x] Added `flutter_map_cache: ^2.0.0`, `http_cache_file_store: ^2.0.1`, `path_provider: ^2.1.5` to `pubspec.yaml`
+- [x] `_initTileCache()` in `LocationScreen` creates `CachedTileProvider` backed by `FileCacheStore` in system cache dir (`osm_tiles/`)
+- [x] `maxStale: Duration(days: 7)` — tiles cached for 7 days
+- [x] Graceful fallback: uses `NetworkTileProvider()` if cache init fails or hasn't completed yet
+
+#### 4.5 — UI Redesign (v2.0) ✅
+- [x] Removed private messaging UI from `ChatScreen` (peer picker, lock icon, `_PeerPickerSheet`) — FluxonApp is group-only
+- [x] Chat screen: group menu via `Icons.more_vert` → bottom sheet (Create/Join/Leave group actions)
+- [x] No-group state: hero icon + CTA buttons ("Create Group" / "Join Group")
+- [x] Directional message bubbles: sharp corner on sender's side, rounded elsewhere
+- [x] Local messages: `colorScheme.primary` background, white text. Remote: `surfaceContainerLow` + border
+- [x] Pill-shaped send input with `AnimatedSwitcher` between send icon and `CircularProgressIndicator`
+- [x] Create Group screen: hero icon + optional name field + visibility-toggle passphrase
+- [x] Join Group screen: different hero icon color + passphrase field + loading state
+- [x] `app.dart`: zero-elevation `appBarTheme` and `navigationBarTheme` (Material 3)
+- [x] Note: `ChatRepository.sendPrivateMessage()` retained at repository level — protocol capability exists, just not exposed via UI
+
+#### 4.6 — User Display Names + Onboarding (v2.1) ✅
+- [x] Created `lib/core/identity/user_profile_manager.dart` — loads/saves `user_display_name` via `flutter_secure_storage`
+- [x] Created `lib/core/providers/profile_providers.dart` — `userProfileManagerProvider` + `displayNameProvider` (reactive `StateProvider`)
+- [x] Created `lib/features/onboarding/onboarding_screen.dart` — first-run screen asks for display name (hero icon, text field, "Let's go" button)
+- [x] `app.dart` → `ConsumerWidget`: renders `OnboardingScreen` when `displayName.isEmpty`, otherwise `_HomeScreen`
+- [x] Chat payload format: `encodeChatPayload()` now encodes as JSON `{"n":"Alice","t":"Hello"}` with backward-compatible fallback to plain UTF-8
+- [x] `ChatMessage.senderName` field — remote messages show sender name in bubbles (falls back to `shortId` if empty)
+- [x] Name changeable at runtime via "Your name" option in group menu → `AlertDialog` with pre-filled `TextField`
+
+#### 4.7 — Reactive Group State (v2.2) ✅
+- [x] Created `lib/core/providers/group_providers.dart` — `activeGroupProvider` (`StateProvider<FluxonGroup?>`) bridges imperative `GroupManager` with Riverpod's reactive system
+- [x] Create/Join screens update both `GroupManager` and `activeGroupProvider`
+- [x] `ChatScreen` watches `activeGroupProvider` — fixes stuck-on-join-screen bug
+- [x] Leave Group clears both `GroupManager` and `activeGroupProvider`
+
+#### 4.8 — Location Screen Fixes (v2.2) ✅
+- [x] Added `INTERNET` permission to `AndroidManifest.xml` (required for OSM tile download)
+- [x] User's own location shown as green `Icons.my_location` marker
+- [x] Default map center changed from `LatLng(0,0)` to `LatLng(20.5937, 78.9629)` (India) at zoom 5
+
+#### Phase 4 Tests
+- [x] `test/core/foreground_service_manager_test.dart` — foreground service lifecycle
+- [x] `test/core/duty_cycle_test.dart` — idle detection, duty-cycle transitions
+- [x] `test/features/app_lifecycle_test.dart` — lifecycle observer, foreground service integration
+- [x] `test/features/group_screens_test.dart` — updated finders for redesigned screens
+- [x] `test/features/chat_controller_test.dart` — updated for removed private chat, added `getDisplayName`
+- [x] `test/features/chat_repository_test.dart` — updated for `ChatPayload` return type
+- [x] 39 test files total, all passing
+
+#### Files changed/created in Phase 4
+
+| Action | File |
+|--------|------|
+| **Created** | `lib/core/services/foreground_service_manager.dart` |
+| **Created** | `lib/core/identity/user_profile_manager.dart` |
+| **Created** | `lib/core/providers/profile_providers.dart` |
+| **Created** | `lib/core/providers/group_providers.dart` |
+| **Created** | `lib/features/onboarding/onboarding_screen.dart` |
+| **Created** | `test/core/foreground_service_manager_test.dart` |
+| **Created** | `test/core/duty_cycle_test.dart` |
+| **Created** | `test/features/app_lifecycle_test.dart` |
+| **Created** | `CHANGELOG.md` |
+| Modified | `lib/main.dart` (foreground service init, user profile init) |
+| Modified | `lib/app.dart` (WithForegroundTask, ConsumerWidget, onboarding routing, theme) |
+| Modified | `lib/core/transport/ble_transport.dart` (duty-cycle scan, idle detection) |
+| Modified | `lib/core/transport/transport_config.dart` (duty-cycle parameters) |
+| Modified | `lib/core/protocol/binary_protocol.dart` (ChatPayload JSON encoding) |
+| Modified | `lib/features/chat/chat_screen.dart` (full redesign, group menu, display names) |
+| Modified | `lib/features/chat/chat_controller.dart` (removed private chat, added getDisplayName) |
+| Modified | `lib/features/chat/chat_providers.dart` (display name injection) |
+| Modified | `lib/features/chat/message_model.dart` (senderName field) |
+| Modified | `lib/features/chat/data/chat_repository.dart` (senderName parameter) |
+| Modified | `lib/features/chat/data/mesh_chat_repository.dart` (display name in payload) |
+| Modified | `lib/features/location/location_screen.dart` (tile caching, own pin, map center) |
+| Modified | `lib/features/group/create_group_screen.dart` (redesign) |
+| Modified | `lib/features/group/join_group_screen.dart` (redesign) |
+| Modified | `android/app/src/main/AndroidManifest.xml` (INTERNET, FOREGROUND_SERVICE) |
+| Modified | `ios/Runner/Info.plist` (background modes, usage descriptions) |
+
+**Remaining for Phase 5 (Future):**
+- [ ] Message persistence: SQLite/Drift database for local chat/location history (currently in-memory only)
 - [ ] Multi-group support (switch between groups, or join multiple simultaneously)
-- [ ] Message delivery ACKs + read receipts (optional, may break end-to-end privacy)
+- [ ] Message delivery ACKs + read receipts (protocol `MessageType.ack` exists but no send/receive logic implemented)
 - [ ] Fragment reassembly (if real devices negotiate MTU < 256)
 - [ ] End-to-end test: 3-device mesh, app backgrounded on middle device, message still relays
 - [ ] Performance profiling: battery drain, memory footprint, relay latency under load
@@ -675,9 +818,11 @@ android.permission.FOREGROUND_SERVICE       (for background mesh relay)
 | 3 | Location update frequency (10s battery vs freshness trade-off)? | ✅ 10s | Implemented in `LocationController` | Phase 3 ✅ |
 | 4 | Group passphrase format: 6-word wordlist (BIP39-style) or random alphanumeric? | ✅ 6-word | Uses `generate_passphrase` | Phase 1.5 ✅ |
 | 5 | Signing key distribution: when and how? | ✅ Noise msg 2&3 payloads | Implemented in Phase 3 | Phase 3 ✅ |
-| 6 | Private chat: feature or optional? | ✅ Feature (full UI) | Peer picker implemented | Phase 3 ✅ |
-| 7 | Support multiple groups per device simultaneously? | ❌ Open (single group only) | Deferred to Phase 4 | Phase 4 |
-| 8 | Offline map tile caching strategy (pre-download)? | ❌ Open | In-memory cache only | Phase 4 |
+| 6 | Private chat: feature or optional? | ✅ Group-only (UI removed) | Protocol retained, UI removed in Phase 4 | Phase 4 ✅ |
+| 7 | Support multiple groups per device simultaneously? | ❌ Open (single group only) | Deferred to Phase 5 | Phase 5 |
+| 8 | Offline map tile caching strategy (pre-download)? | ✅ `flutter_map_cache` + `FileCacheStore` | 7-day file cache, network fallback | Phase 4 ✅ |
+| 9 | User identity display: peer ID or display name? | ✅ Display name (onboarding) | Name in JSON chat payload, fallback to shortId | Phase 4 ✅ |
+| 10 | Background relay strategy? | ✅ Android foreground service + iOS background modes | `flutter_foreground_task`, stops only on detached | Phase 4 ✅ |
 
 ---
 
