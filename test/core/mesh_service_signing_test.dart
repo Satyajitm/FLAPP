@@ -106,7 +106,7 @@ void main() {
       // Verify packet structure
       expect(packet.type, equals(MessageType.chat));
       expect(packet.sourceId, equals(myPeerId));
-      expect(BinaryProtocol.decodeChatPayload(packet.payload), equals('signed message'));
+      expect(BinaryProtocol.decodeChatPayload(packet.payload).text, equals('signed message'));
     });
 
 test('packet header includes all required fields for signing', () {

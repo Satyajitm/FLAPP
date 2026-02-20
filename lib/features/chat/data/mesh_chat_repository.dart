@@ -5,6 +5,7 @@ import '../../../core/identity/peer_id.dart';
 import '../../../core/protocol/binary_protocol.dart';
 import '../../../core/protocol/message_types.dart';
 import '../../../core/protocol/packet.dart';
+import '../../../core/services/receipt_service.dart';
 import '../../../core/transport/transport.dart';
 import '../message_model.dart';
 import 'chat_repository.dart';
@@ -22,6 +23,7 @@ class MeshChatRepository implements ChatRepository {
   final Transport _transport;
   final PeerId? _myPeerId;
   final GroupManager _groupManager;
+  final ReceiptService? _receiptService;
   final StreamController<ChatMessage> _messageController =
       StreamController<ChatMessage>.broadcast();
   StreamSubscription? _packetSub;
@@ -30,9 +32,11 @@ class MeshChatRepository implements ChatRepository {
     required Transport transport,
     PeerId? myPeerId,
     GroupManager? groupManager,
+    ReceiptService? receiptService,
   })  : _transport = transport,
         _myPeerId = myPeerId,
-        _groupManager = groupManager ?? GroupManager() {
+        _groupManager = groupManager ?? GroupManager(),
+        _receiptService = receiptService {
     _listenForMessages();
   }
 
@@ -70,10 +74,20 @@ class MeshChatRepository implements ChatRepository {
     );
 
     _messageController.add(message);
+
+    // Auto-send delivery receipt
+    _receiptService?.sendDeliveryReceipt(
+      originalTimestamp: packet.timestamp,
+      originalSenderId: packet.sourceId,
+    );
   }
 
   @override
   Stream<ChatMessage> get onMessageReceived => _messageController.stream;
+
+  @override
+  Stream<ReceiptEvent> get onReceiptReceived =>
+      _receiptService?.onReceiptReceived ?? const Stream.empty();
 
   @override
   Future<ChatMessage> sendMessage({
@@ -104,7 +118,7 @@ class MeshChatRepository implements ChatRepository {
       text: text,
       timestamp: DateTime.fromMillisecondsSinceEpoch(packet.timestamp),
       isLocal: true,
-      isDelivered: true,
+      status: MessageStatus.sent,
     );
   }
 
@@ -132,7 +146,20 @@ class MeshChatRepository implements ChatRepository {
       text: text,
       timestamp: DateTime.fromMillisecondsSinceEpoch(packet.timestamp),
       isLocal: true,
-      isDelivered: true,
+      status: MessageStatus.sent,
+    );
+  }
+
+  @override
+  void sendReadReceipt({
+    required String messageId,
+    required int originalTimestamp,
+    required Uint8List originalSenderId,
+  }) {
+    _receiptService?.queueReadReceipt(
+      messageId: messageId,
+      originalTimestamp: originalTimestamp,
+      originalSenderId: originalSenderId,
     );
   }
 

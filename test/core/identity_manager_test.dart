@@ -27,11 +27,17 @@ void main() {
     final testPublicKey = Uint8List.fromList(List.generate(32, (i) => i + 100));
     final ({Uint8List privateKey, Uint8List publicKey}) testKeyPair = (privateKey: testPrivateKey, publicKey: testPublicKey);
 
+    final testSigningPrivateKey = Uint8List.fromList(List.generate(64, (i) => i));
+    final testSigningPublicKey = Uint8List.fromList(List.generate(32, (i) => i + 200));
+    final ({Uint8List privateKey, Uint8List publicKey}) testSigningKeyPair = (privateKey: testSigningPrivateKey, publicKey: testSigningPublicKey);
+
     test('initialize loads keys and sets peer ID', () async {
       when(() => mockKeyManager.getOrCreateStaticKeyPair())
           .thenAnswer((_) async => testKeyPair);
       when(() => mockKeyManager.derivePeerId(any()))
           .thenReturn(Uint8List(32));
+      when(() => mockKeyManager.getOrCreateSigningKeyPair())
+          .thenAnswer((_) async => testSigningKeyPair);
 
       await identityManager.initialize();
 
@@ -64,7 +70,11 @@ void main() {
           .thenAnswer((_) async => testKeyPair);
       when(() => mockKeyManager.derivePeerId(any()))
           .thenReturn(Uint8List(32));
+      when(() => mockKeyManager.getOrCreateSigningKeyPair())
+          .thenAnswer((_) async => testSigningKeyPair);
       when(() => mockKeyManager.deleteStaticKeyPair())
+          .thenAnswer((_) async {});
+      when(() => mockKeyManager.deleteSigningKeyPair())
           .thenAnswer((_) async {});
 
       await identityManager.initialize();

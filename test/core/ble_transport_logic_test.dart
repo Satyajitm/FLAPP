@@ -60,7 +60,7 @@ void main() {
         expect(result, isNotNull);
         expect(result!.type, equals(MessageType.chat));
         expect(
-          BinaryProtocol.decodeChatPayload(result.payload),
+          BinaryProtocol.decodeChatPayload(result.payload).text,
           equals('hello'),
         );
       });
@@ -439,7 +439,7 @@ void main() {
       expect(result, isNotNull);
       expect(result!.type, equals(MessageType.chat));
       expect(
-        BinaryProtocol.decodeChatPayload(result.payload),
+        BinaryProtocol.decodeChatPayload(result.payload).text,
         equals('e2e test'),
       );
       expect(result.sourceId[0], equals(0x42));
@@ -456,7 +456,7 @@ void main() {
 
       expect(result, isNotNull);
       expect(
-        BinaryProtocol.decodeChatPayload(result!.payload),
+        BinaryProtocol.decodeChatPayload(result!.payload).text,
         equals('signed e2e'),
       );
       expect(result.signature, equals(sig));

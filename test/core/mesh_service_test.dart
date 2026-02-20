@@ -83,7 +83,7 @@ void main() {
 
       expect(received, hasLength(1));
       expect(
-        BinaryProtocol.decodeChatPayload(received.first.payload),
+        BinaryProtocol.decodeChatPayload(received.first.payload).text,
         equals('hello'),
       );
     });
@@ -305,7 +305,7 @@ void main() {
       rawTransport.broadcastedPackets.clear();
       await meshService.broadcastPacket(packet);
 
-      expect(rawTransport.broadcastedPackets, hasLength(1));
+      expect(rawTransport.broadcastedPackets.where((p) => p.type == MessageType.chat), hasLength(1));
     });
 
     test('delegates sendPacket to raw transport', () async {
@@ -530,7 +530,7 @@ void main() {
           .toList();
       expect(relayed, isNotEmpty);
       expect(
-        BinaryProtocol.decodeChatPayload(relayed.first.payload),
+        BinaryProtocol.decodeChatPayload(relayed.first.payload).text,
         equals('relay me'),
       );
     });

@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/identity/peer_id.dart';
+import '../../core/protocol/binary_protocol.dart';
+import '../../core/services/receipt_service.dart';
 import 'data/chat_repository.dart';
 import 'message_model.dart';
 
@@ -38,6 +40,7 @@ class ChatController extends StateNotifier<ChatState> {
   final PeerId _myPeerId;
   final String Function() _getDisplayName;
   StreamSubscription? _messageSub;
+  StreamSubscription? _receiptSub;
 
   ChatController({
     required ChatRepository repository,
@@ -48,6 +51,7 @@ class ChatController extends StateNotifier<ChatState> {
         _getDisplayName = getDisplayName,
         super(const ChatState()) {
     _listenForMessages();
+    _listenForReceipts();
   }
 
   void _listenForMessages() {
@@ -56,6 +60,59 @@ class ChatController extends StateNotifier<ChatState> {
         messages: [...state.messages, message],
       );
     });
+  }
+
+  void _listenForReceipts() {
+    _receiptSub = _repository.onReceiptReceived.listen((receipt) {
+      _handleReceipt(receipt);
+    });
+  }
+
+  void _handleReceipt(ReceiptEvent receipt) {
+    final messages = [...state.messages];
+    final index = messages.indexWhere((m) => m.id == receipt.originalMessageId);
+    if (index == -1) return;
+
+    final msg = messages[index];
+    if (!msg.isLocal) return; // Only update status on our own messages
+
+    final newDeliveredTo = {...msg.deliveredTo};
+    final newReadBy = {...msg.readBy};
+    var newStatus = msg.status;
+
+    if (receipt.receiptType == ReceiptType.delivered) {
+      newDeliveredTo.add(receipt.fromPeer);
+      if (newStatus == MessageStatus.sent) {
+        newStatus = MessageStatus.delivered;
+      }
+    } else if (receipt.receiptType == ReceiptType.read) {
+      newReadBy.add(receipt.fromPeer);
+      newDeliveredTo.add(receipt.fromPeer); // read implies delivered
+      newStatus = MessageStatus.read;
+    }
+
+    messages[index] = msg.copyWith(
+      status: newStatus,
+      deliveredTo: newDeliveredTo,
+      readBy: newReadBy,
+    );
+
+    state = state.copyWith(messages: messages);
+  }
+
+  /// Mark incoming messages as read and send read receipts.
+  ///
+  /// Called when the chat screen is visible and messages are displayed.
+  void markMessagesAsRead(List<ChatMessage> visibleMessages) {
+    for (final msg in visibleMessages) {
+      if (!msg.isLocal) {
+        _repository.sendReadReceipt(
+          messageId: msg.id,
+          originalTimestamp: msg.timestamp.millisecondsSinceEpoch,
+          originalSenderId: msg.sender.bytes,
+        );
+      }
+    }
   }
 
   /// Send a chat message to all group members.
@@ -81,6 +138,7 @@ class ChatController extends StateNotifier<ChatState> {
   @override
   void dispose() {
     _messageSub?.cancel();
+    _receiptSub?.cancel();
     _repository.dispose();
     super.dispose();
   }

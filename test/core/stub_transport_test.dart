@@ -127,7 +127,7 @@ void main() {
         final received = await future;
         expect(received.type, equals(MessageType.chat));
         expect(
-          BinaryProtocol.decodeChatPayload(received.payload),
+          BinaryProtocol.decodeChatPayload(received.payload).text,
           equals('echo test'),
         );
       });
@@ -140,7 +140,7 @@ void main() {
 
         final received = await future;
         expect(
-          BinaryProtocol.decodeChatPayload(received.payload),
+          BinaryProtocol.decodeChatPayload(received.payload).text,
           equals('send echo'),
         );
       });
@@ -156,9 +156,9 @@ void main() {
         await Future.delayed(const Duration(milliseconds: 50));
 
         expect(received, hasLength(3));
-        expect(BinaryProtocol.decodeChatPayload(received[0].payload), equals('one'));
-        expect(BinaryProtocol.decodeChatPayload(received[1].payload), equals('two'));
-        expect(BinaryProtocol.decodeChatPayload(received[2].payload), equals('three'));
+        expect(BinaryProtocol.decodeChatPayload(received[0].payload).text, equals('one'));
+        expect(BinaryProtocol.decodeChatPayload(received[1].payload).text, equals('two'));
+        expect(BinaryProtocol.decodeChatPayload(received[2].payload).text, equals('three'));
         await sub.cancel();
       });
     });
@@ -182,7 +182,7 @@ void main() {
 
         final received = await future;
         expect(
-          BinaryProtocol.decodeChatPayload(received.payload),
+          BinaryProtocol.decodeChatPayload(received.payload).text,
           equals('injected'),
         );
       });
@@ -196,7 +196,7 @@ void main() {
 
         final received = await future;
         expect(
-          BinaryProtocol.decodeChatPayload(received.payload),
+          BinaryProtocol.decodeChatPayload(received.payload).text,
           equals('always works'),
         );
       });
@@ -212,9 +212,9 @@ void main() {
         await Future.delayed(const Duration(milliseconds: 50));
 
         expect(received, hasLength(3));
-        expect(BinaryProtocol.decodeChatPayload(received[0].payload), equals('a'));
-        expect(BinaryProtocol.decodeChatPayload(received[1].payload), equals('b'));
-        expect(BinaryProtocol.decodeChatPayload(received[2].payload), equals('c'));
+        expect(BinaryProtocol.decodeChatPayload(received[0].payload).text, equals('a'));
+        expect(BinaryProtocol.decodeChatPayload(received[1].payload).text, equals('b'));
+        expect(BinaryProtocol.decodeChatPayload(received[2].payload).text, equals('c'));
         await sub.cancel();
       });
 
@@ -284,15 +284,15 @@ void main() {
 
         expect(transport.broadcastedPackets, hasLength(3));
         expect(
-          BinaryProtocol.decodeChatPayload(transport.broadcastedPackets[0].payload),
+          BinaryProtocol.decodeChatPayload(transport.broadcastedPackets[0].payload).text,
           equals('first'),
         );
         expect(
-          BinaryProtocol.decodeChatPayload(transport.broadcastedPackets[1].payload),
+          BinaryProtocol.decodeChatPayload(transport.broadcastedPackets[1].payload).text,
           equals('second'),
         );
         expect(
-          BinaryProtocol.decodeChatPayload(transport.broadcastedPackets[2].payload),
+          BinaryProtocol.decodeChatPayload(transport.broadcastedPackets[2].payload).text,
           equals('third'),
         );
       });
@@ -305,7 +305,7 @@ void main() {
 
         expect(t.broadcastedPackets, hasLength(1));
         expect(
-          BinaryProtocol.decodeChatPayload(t.broadcastedPackets.first.payload),
+          BinaryProtocol.decodeChatPayload(t.broadcastedPackets.first.payload).text,
           equals('loopback capture'),
         );
         t.dispose();
@@ -349,11 +349,11 @@ void main() {
         expect(transport.sentPackets[0].$2, equals(peer1));
         expect(transport.sentPackets[1].$2, equals(peer2));
         expect(
-          BinaryProtocol.decodeChatPayload(transport.sentPackets[0].$1.payload),
+          BinaryProtocol.decodeChatPayload(transport.sentPackets[0].$1.payload).text,
           equals('to peer1'),
         );
         expect(
-          BinaryProtocol.decodeChatPayload(transport.sentPackets[1].$1.payload),
+          BinaryProtocol.decodeChatPayload(transport.sentPackets[1].$1.payload).text,
           equals('to peer2'),
         );
       });

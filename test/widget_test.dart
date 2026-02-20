@@ -5,6 +5,7 @@ import 'package:fluxon_app/app.dart';
 import 'package:fluxon_app/core/identity/group_manager.dart';
 import 'package:fluxon_app/core/identity/peer_id.dart';
 import 'package:fluxon_app/core/providers/group_providers.dart';
+import 'package:fluxon_app/core/providers/profile_providers.dart';
 import 'package:fluxon_app/core/transport/stub_transport.dart';
 import 'package:fluxon_app/features/chat/chat_providers.dart';
 
@@ -19,6 +20,7 @@ void main() {
           transportProvider.overrideWithValue(transport),
           myPeerIdProvider.overrideWithValue(PeerId(peerIdBytes)),
           groupManagerProvider.overrideWithValue(GroupManager()),
+          displayNameProvider.overrideWith((ref) => 'TestUser'),
         ],
         child: const FluxonApp(),
       ),

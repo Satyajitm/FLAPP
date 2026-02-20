@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:typed_data';
 import '../../../core/identity/peer_id.dart';
+import '../../../core/services/receipt_service.dart';
 import '../message_model.dart';
 
 /// Abstract interface for chat data operations.
@@ -9,6 +11,9 @@ import '../message_model.dart';
 abstract class ChatRepository {
   /// Stream of incoming chat messages, fully decoded and ready for display.
   Stream<ChatMessage> get onMessageReceived;
+
+  /// Stream of receipt events (delivery/read confirmations).
+  Stream<ReceiptEvent> get onReceiptReceived;
 
   /// Send a chat message text as a broadcast to all connected peers.
   ///
@@ -34,6 +39,13 @@ abstract class ChatRepository {
     required String text,
     required PeerId sender,
     required PeerId recipient,
+  });
+
+  /// Queue a read receipt for a message.
+  void sendReadReceipt({
+    required String messageId,
+    required int originalTimestamp,
+    required Uint8List originalSenderId,
   });
 
   /// Release any resources held by this repository.

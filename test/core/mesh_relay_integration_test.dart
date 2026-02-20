@@ -147,7 +147,7 @@ void main() {
       expect(cReceived, hasLength(1),
           reason: 'C should receive exactly one chat message');
       expect(
-        BinaryProtocol.decodeChatPayload(cReceived.first.payload),
+        BinaryProtocol.decodeChatPayload(cReceived.first.payload).text,
         equals('hello from A'),
       );
       expect(cReceived.first.sourceId, equals(peerIdA),

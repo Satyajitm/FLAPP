@@ -173,13 +173,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Play notification sound when a new incoming message arrives.
+    // Play notification sound and send read receipts when new incoming messages arrive.
     ref.listen<ChatState>(chatControllerProvider, (previous, next) {
       if (previous == null) return;
       if (next.messages.length > previous.messages.length) {
-        final newest = next.messages.last;
-        if (!newest.isLocal) {
+        final newMessages = next.messages.sublist(previous.messages.length);
+        final incoming = newMessages.where((m) => !m.isLocal).toList();
+        if (incoming.isNotEmpty) {
           _notificationSound.play();
+          // Chat screen is open, so mark as read immediately
+          ref.read(chatControllerProvider.notifier).markMessagesAsRead(incoming);
         }
       }
     });
@@ -500,14 +503,32 @@ class _MessageBubble extends StatelessWidget {
             const SizedBox(height: 4),
             Align(
               alignment: Alignment.bottomRight,
-              child: Text(
-                _formatTime(message.timestamp),
-                style: TextStyle(
-                  fontSize: 10,
-                  color: isLocal
-                      ? Colors.white.withValues(alpha: 0.65)
-                      : colorScheme.onSurfaceVariant,
-                ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    _formatTime(message.timestamp),
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: isLocal
+                          ? Colors.white.withValues(alpha: 0.65)
+                          : colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  if (isLocal) ...[
+                    const SizedBox(width: 4),
+                    Icon(
+                      message.status == MessageStatus.read ||
+                              message.status == MessageStatus.delivered
+                          ? Icons.done_all
+                          : Icons.done,
+                      size: 14,
+                      color: message.status == MessageStatus.read
+                          ? Colors.lightBlueAccent
+                          : Colors.white.withValues(alpha: 0.65),
+                    ),
+                  ],
+                ],
               ),
             ),
           ],

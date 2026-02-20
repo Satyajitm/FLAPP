@@ -9,8 +9,8 @@ import 'package:fluxon_app/core/identity/peer_id.dart';
 import 'package:fluxon_app/core/protocol/binary_protocol.dart';
 import 'package:fluxon_app/core/protocol/message_types.dart';
 import 'package:fluxon_app/core/protocol/packet.dart';
+import 'package:fluxon_app/core/services/receipt_service.dart';
 import 'package:fluxon_app/core/transport/transport.dart';
-import 'package:fluxon_app/features/chat/data/chat_repository.dart';
 import 'package:fluxon_app/features/chat/data/mesh_chat_repository.dart';
 import 'package:fluxon_app/features/chat/message_model.dart';
 
@@ -139,7 +139,7 @@ void main() {
       expect(result.text, equals('Test message'));
       expect(result.sender, equals(sender));
       expect(result.isLocal, isTrue);
-      expect(result.isDelivered, isTrue);
+      expect(result.status, equals(MessageStatus.sent));
       expect(result.id, isNotEmpty);
 
       // Verify a packet was broadcast
@@ -260,7 +260,7 @@ void main() {
 
       expect(result.text, equals('outgoing'));
       expect(result.isLocal, isTrue);
-      expect(result.isDelivered, isTrue);
+      expect(result.status, equals(MessageStatus.sent));
       expect(transport.broadcastedPackets, hasLength(1));
     });
   });
@@ -402,6 +402,155 @@ void main() {
 
       // The returned ChatMessage should contain the plaintext
       expect(result.text, equals('my secret'));
+      expect(result.isLocal, isTrue);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Receipt integration tests
+  // -------------------------------------------------------------------------
+
+  group('MeshChatRepository — receipt wiring', () {
+    late MockTransport transport;
+    late GroupManager groupManager;
+    late ReceiptService receiptService;
+    late MeshChatRepository repository;
+    final myPeerId = _makePeerId(0xAA);
+    final remotePeerId = _makePeerId(0xBB);
+
+    setUp(() {
+      transport = MockTransport();
+      groupManager = GroupManager(
+        cipher: _FakeGroupCipher(),
+        groupStorage: GroupStorage(storage: _FakeSecureStorage()),
+      );
+      receiptService = ReceiptService(
+        transport: transport,
+        myPeerId: myPeerId,
+        groupManager: groupManager,
+      );
+      receiptService.start();
+      repository = MeshChatRepository(
+        transport: transport,
+        myPeerId: myPeerId,
+        groupManager: groupManager,
+        receiptService: receiptService,
+      );
+    });
+
+    tearDown(() {
+      repository.dispose();
+      receiptService.dispose();
+      transport.dispose();
+    });
+
+    test('incoming chat message auto-sends delivery receipt', () async {
+      final chatPacket = _buildChatPacket('trigger receipt', senderByte: 0xBB);
+
+      transport.broadcastedPackets.clear();
+      transport.simulateIncomingPacket(chatPacket);
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      // Should have broadcast a delivery receipt
+      final acks = transport.broadcastedPackets
+          .where((p) => p.type == MessageType.ack)
+          .toList();
+      expect(acks, hasLength(1));
+
+      final decoded = BinaryProtocol.decodeReceiptPayload(acks.first.payload);
+      expect(decoded, isNotNull);
+      expect(decoded!.receiptType, equals(ReceiptType.delivered));
+      expect(decoded.originalSenderId, equals(remotePeerId.bytes));
+    });
+
+    test('onReceiptReceived forwards events from ReceiptService', () async {
+      final completer = Completer<ReceiptEvent>();
+      final sub = repository.onReceiptReceived.listen(completer.complete);
+
+      // Simulate an incoming receipt
+      final receiptPayload = BinaryProtocol.encodeReceiptPayload(
+        receiptType: ReceiptType.delivered,
+        originalTimestamp: 9999,
+        originalSenderId: myPeerId.bytes,
+      );
+      final receiptPacket = BinaryProtocol.buildPacket(
+        type: MessageType.ack,
+        sourceId: remotePeerId.bytes,
+        payload: receiptPayload,
+      );
+      transport.simulateIncomingPacket(receiptPacket);
+
+      final event = await completer.future;
+      expect(event.receiptType, equals(ReceiptType.delivered));
+      expect(event.fromPeer, equals(remotePeerId));
+
+      await sub.cancel();
+    });
+
+    test('sendReadReceipt delegates to ReceiptService', () async {
+      // Call sendReadReceipt — it queues in ReceiptService
+      repository.sendReadReceipt(
+        messageId: 'test-msg-id',
+        originalTimestamp: 12345,
+        originalSenderId: remotePeerId.bytes,
+      );
+
+      // Should not send immediately (batched)
+      expect(
+          transport.broadcastedPackets.where((p) => p.type == MessageType.ack),
+          isEmpty);
+
+      // Wait for 2-second batch timer
+      await Future.delayed(const Duration(milliseconds: 2200));
+
+      final acks = transport.broadcastedPackets
+          .where((p) => p.type == MessageType.ack)
+          .toList();
+      expect(acks, hasLength(1));
+
+      final decoded = BinaryProtocol.decodeReceiptPayload(acks.first.payload);
+      expect(decoded!.receiptType, equals(ReceiptType.read));
+    });
+
+    test('no receipt sent for self-sourced packets', () async {
+      // Self-sourced packet should be filtered AND no receipt sent
+      final selfPacket = _buildChatPacket('from me', senderByte: 0xAA);
+
+      transport.broadcastedPackets.clear();
+      transport.simulateIncomingPacket(selfPacket);
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      // No delivery receipt should be sent for our own packet
+      final acks = transport.broadcastedPackets
+          .where((p) => p.type == MessageType.ack)
+          .toList();
+      expect(acks, isEmpty);
+    });
+
+    test('onReceiptReceived is empty stream when no receiptService', () async {
+      final repoNoReceipt = MeshChatRepository(
+        transport: transport,
+        myPeerId: myPeerId,
+      );
+
+      final completer = Completer<ReceiptEvent>();
+      final sub = repoNoReceipt.onReceiptReceived.listen(completer.complete);
+
+      await Future.delayed(const Duration(milliseconds: 50));
+      expect(completer.isCompleted, isFalse);
+
+      await sub.cancel();
+      repoNoReceipt.dispose();
+    });
+
+    test('sendPrivateMessage returns status sent', () async {
+      final result = await repository.sendPrivateMessage(
+        text: 'private msg',
+        sender: myPeerId,
+        recipient: remotePeerId,
+      );
+
+      expect(result.status, equals(MessageStatus.sent));
       expect(result.isLocal, isTrue);
     });
   });

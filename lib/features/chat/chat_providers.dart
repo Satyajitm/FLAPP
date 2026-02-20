@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/identity/peer_id.dart';
 import '../../core/providers/group_providers.dart';
 import '../../core/providers/profile_providers.dart';
+import '../../core/services/receipt_service.dart';
 import '../../core/transport/transport.dart';
 import '../../core/transport/transport_config.dart';
 import 'data/chat_repository.dart';
@@ -42,15 +43,32 @@ final transportConfigProvider = Provider<TransportConfig>((ref) {
 // Chat feature providers
 // ---------------------------------------------------------------------------
 
+/// Provides the [ReceiptService] for delivery/read receipts.
+final receiptServiceProvider = Provider<ReceiptService>((ref) {
+  final transport = ref.watch(transportProvider);
+  final myPeerId = ref.watch(myPeerIdProvider);
+  final groupManager = ref.watch(groupManagerProvider);
+  final service = ReceiptService(
+    transport: transport,
+    myPeerId: myPeerId,
+    groupManager: groupManager,
+  );
+  service.start();
+  ref.onDispose(() => service.dispose());
+  return service;
+});
+
 /// Provides the [ChatRepository] implementation.
 final chatRepositoryProvider = Provider<ChatRepository>((ref) {
   final transport = ref.watch(transportProvider);
   final myPeerId = ref.watch(myPeerIdProvider);
   final groupManager = ref.watch(groupManagerProvider);
+  final receiptService = ref.watch(receiptServiceProvider);
   final repository = MeshChatRepository(
     transport: transport,
     myPeerId: myPeerId,
     groupManager: groupManager,
+    receiptService: receiptService,
   );
   ref.onDispose(() => repository.dispose());
   return repository;

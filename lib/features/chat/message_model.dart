@@ -1,5 +1,17 @@
 import '../../core/identity/peer_id.dart';
 
+/// Delivery/read status of a message.
+enum MessageStatus {
+  /// Message sent but no receipt received yet.
+  sent,
+
+  /// At least one peer has received the message.
+  delivered,
+
+  /// At least one peer has read the message.
+  read,
+}
+
 /// A chat message in the mesh network.
 class ChatMessage {
   /// Unique message ID (packet ID from the transport layer).
@@ -21,16 +33,48 @@ class ChatMessage {
   /// Whether this message was sent by the local device.
   final bool isLocal;
 
-  /// Whether this message has been delivered (acknowledged).
-  bool isDelivered;
+  /// Current delivery/read status.
+  final MessageStatus status;
 
-  ChatMessage({
+  /// Peers who have sent a delivery receipt for this message.
+  final Set<PeerId> deliveredTo;
+
+  /// Peers who have sent a read receipt for this message.
+  final Set<PeerId> readBy;
+
+  const ChatMessage({
     required this.id,
     required this.sender,
     required this.text,
     required this.timestamp,
     this.senderName = '',
     this.isLocal = false,
-    this.isDelivered = false,
+    this.status = MessageStatus.sent,
+    this.deliveredTo = const {},
+    this.readBy = const {},
   });
+
+  /// Whether this message has been delivered (acknowledged).
+  /// Backward-compatible getter for existing code.
+  bool get isDelivered =>
+      status == MessageStatus.delivered || status == MessageStatus.read;
+
+  /// Create a copy with updated receipt information.
+  ChatMessage copyWith({
+    MessageStatus? status,
+    Set<PeerId>? deliveredTo,
+    Set<PeerId>? readBy,
+  }) {
+    return ChatMessage(
+      id: id,
+      sender: sender,
+      senderName: senderName,
+      text: text,
+      timestamp: timestamp,
+      isLocal: isLocal,
+      status: status ?? this.status,
+      deliveredTo: deliveredTo ?? this.deliveredTo,
+      readBy: readBy ?? this.readBy,
+    );
+  }
 }

@@ -152,6 +152,36 @@ class BinaryProtocol {
     return DiscoveryPayload(neighbors: neighbors);
   }
 
+  /// Encode a receipt (ack) payload.
+  ///
+  /// Format: [receiptType:1][originalTimestamp:8][originalSenderId:32]
+  static Uint8List encodeReceiptPayload({
+    required int receiptType,
+    required int originalTimestamp,
+    required Uint8List originalSenderId,
+  }) {
+    final buffer = ByteData(41);
+    buffer.setUint8(0, receiptType);
+    buffer.setInt64(1, originalTimestamp);
+    final bytes = buffer.buffer.asUint8List();
+    bytes.setRange(9, 41, originalSenderId);
+    return bytes;
+  }
+
+  /// Decode a receipt (ack) payload.
+  static ReceiptPayload? decodeReceiptPayload(Uint8List data) {
+    if (data.length < 41) return null;
+    final buffer = ByteData.sublistView(data);
+    final receiptType = buffer.getUint8(0);
+    final originalTimestamp = buffer.getInt64(1);
+    final originalSenderId = Uint8List.fromList(data.sublist(9, 41));
+    return ReceiptPayload(
+      receiptType: receiptType,
+      originalTimestamp: originalTimestamp,
+      originalSenderId: originalSenderId,
+    );
+  }
+
   /// Build a complete FluxonPacket from components.
   static FluxonPacket buildPacket({
     required MessageType type,
@@ -211,5 +241,24 @@ class EmergencyPayload {
     required this.latitude,
     required this.longitude,
     required this.message,
+  });
+}
+
+/// Receipt type flag values for delivery/read receipts.
+class ReceiptType {
+  static const int delivered = 0x01;
+  static const int read = 0x02;
+}
+
+/// Decoded receipt (ack) payload.
+class ReceiptPayload {
+  final int receiptType;
+  final int originalTimestamp;
+  final Uint8List originalSenderId;
+
+  const ReceiptPayload({
+    required this.receiptType,
+    required this.originalTimestamp,
+    required this.originalSenderId,
   });
 }
