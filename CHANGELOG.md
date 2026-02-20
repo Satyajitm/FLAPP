@@ -5,6 +5,62 @@ Each entry records **what** changed, **which files** were affected, and **why** 
 
 ---
 
+## [v2.3] — Incoming Message Notification Sound
+**Date:** 2026-02-20
+**Branch:** `v2`
+
+### Summary
+Added an audible notification tone when an incoming (non-local) chat message is received. The tone is a short two-note chime (880 Hz → 1047 Hz, 200ms) generated programmatically at runtime — no bundled audio assets required.
+
+---
+
+### Changes
+
+#### 1. `audioplayers` Dependency — `pubspec.yaml`
+
+**What changed:**
+- Added `audioplayers: ^6.1.0`
+
+**Why:**
+Provides cross-platform audio playback (Android, iOS, desktop) from a local file source. Used to play the generated notification WAV.
+
+---
+
+#### 2. Notification Sound Service — `lib/core/services/notification_sound.dart` *(new)*
+
+**What changed:**
+- New `NotificationSoundService` class
+- `play()` — generates a WAV file on first call (cached in temp directory), then plays it via `AudioPlayer`
+- `_generateToneWav()` — builds a 200ms, 16-bit mono, 44100 Hz WAV in memory: two-tone sine wave (A5 → C6) with 5ms fade-in/fade-out envelope to avoid clicks
+- `dispose()` — releases the `AudioPlayer` resource
+
+**Why:**
+Generating the tone at runtime avoids bundling audio assets and keeps the app size minimal. The two-tone chime is short and distinctive without being jarring. The file is cached in the temp directory so it's only generated once per app session.
+
+---
+
+#### 3. Chat Screen Listener — `lib/features/chat/chat_screen.dart`
+
+**What changed:**
+- Added `import '../../core/services/notification_sound.dart'` and `import 'chat_controller.dart'`
+- Added `_notificationSound` field (`NotificationSoundService` instance) to `_ChatScreenState`
+- Added `_notificationSound.dispose()` in `dispose()`
+- Added `ref.listen<ChatState>()` in `build()` — compares previous and next message lists; when a new non-local message arrives (`!newest.isLocal`), calls `_notificationSound.play()`
+
+**Why:**
+`ref.listen` fires on every state change but only triggers the sound when the message count increases and the newest message is from a remote peer. This avoids playing sounds for the user's own sent messages.
+
+---
+
+### What Did NOT Change
+- All of `lib/core/` (transport, mesh, crypto, protocol, identity) — **unchanged**
+- Chat controller, repository, model — **unchanged**
+- Location, Emergency features — **unchanged**
+- Wire protocol, BLE UUIDs, packet format — **unchanged**
+- Group management, onboarding, user profiles — **unchanged**
+
+---
+
 ## [v2.2] — Bug Fixes: Map + Reactive Group State
 **Date:** 2026-02-18
 **Branch:** `v2`
