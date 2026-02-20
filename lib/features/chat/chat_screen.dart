@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/providers/group_providers.dart';
 import '../../core/providers/profile_providers.dart';
+import '../../core/services/notification_sound.dart';
+import 'chat_controller.dart';
 import 'chat_providers.dart';
 import 'message_model.dart';
 
@@ -16,11 +18,13 @@ class ChatScreen extends ConsumerStatefulWidget {
 class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _textController = TextEditingController();
   final _scrollController = ScrollController();
+  final _notificationSound = NotificationSoundService();
 
   @override
   void dispose() {
     _textController.dispose();
     _scrollController.dispose();
+    _notificationSound.dispose();
     super.dispose();
   }
 
@@ -169,6 +173,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Play notification sound when a new incoming message arrives.
+    ref.listen<ChatState>(chatControllerProvider, (previous, next) {
+      if (previous == null) return;
+      if (next.messages.length > previous.messages.length) {
+        final newest = next.messages.last;
+        if (!newest.isLocal) {
+          _notificationSound.play();
+        }
+      }
+    });
+
     final chatState = ref.watch(chatControllerProvider);
     final group = ref.watch(activeGroupProvider);
     final messages = chatState.messages;

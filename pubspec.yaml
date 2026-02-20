@@ -37,6 +37,9 @@ dependencies:
   # Runtime permission requests (location for BLE scanning on Android)
   permission_handler: ^11.3.0
 
+  # Notification sound for incoming messages
+  audioplayers: ^6.1.0
+
   # Compression
   archive: ^4.0.4
 
