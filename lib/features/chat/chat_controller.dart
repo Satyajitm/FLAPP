@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/identity/peer_id.dart';
 import '../../core/protocol/binary_protocol.dart';
+import '../../core/services/message_storage_service.dart';
 import '../../core/services/receipt_service.dart';
 import 'data/chat_repository.dart';
 import 'message_model.dart';
@@ -33,12 +34,18 @@ class ChatState {
 /// injected [ChatRepository]. This controller is purely concerned with
 /// application-level state management.
 ///
+/// Messages are persisted to local storage via [MessageStorageService],
+/// partitioned by group ID, and survive app restarts. They remain until
+/// the user explicitly deletes them.
+///
 /// Only group broadcast messages are supported. One-to-one private messaging
 /// is not a feature of FluxonApp.
 class ChatController extends StateNotifier<ChatState> {
   final ChatRepository _repository;
   final PeerId _myPeerId;
   final String Function() _getDisplayName;
+  final MessageStorageService? _storageService;
+  final String? _groupId;
   StreamSubscription? _messageSub;
   StreamSubscription? _receiptSub;
 
@@ -46,12 +53,32 @@ class ChatController extends StateNotifier<ChatState> {
     required ChatRepository repository,
     required PeerId myPeerId,
     required String Function() getDisplayName,
+    MessageStorageService? storageService,
+    String? groupId,
   })  : _repository = repository,
         _myPeerId = myPeerId,
         _getDisplayName = getDisplayName,
+        _storageService = storageService,
+        _groupId = groupId,
         super(const ChatState()) {
+    _loadPersistedMessages();
     _listenForMessages();
     _listenForReceipts();
+  }
+
+  /// Restore messages saved from a previous session for the active group.
+  Future<void> _loadPersistedMessages() async {
+    if (_storageService == null || _groupId == null) return;
+    final saved = await _storageService.loadMessages(_groupId);
+    if (saved.isNotEmpty) {
+      state = state.copyWith(messages: saved);
+    }
+  }
+
+  /// Save the current message list to disk (fire-and-forget).
+  void _persistMessages() {
+    if (_groupId == null) return;
+    _storageService?.saveMessages(_groupId, state.messages);
   }
 
   void _listenForMessages() {
@@ -59,6 +86,7 @@ class ChatController extends StateNotifier<ChatState> {
       state = state.copyWith(
         messages: [...state.messages, message],
       );
+      _persistMessages();
     });
   }
 
@@ -98,6 +126,7 @@ class ChatController extends StateNotifier<ChatState> {
     );
 
     state = state.copyWith(messages: messages);
+    _persistMessages();
   }
 
   /// Mark incoming messages as read and send read receipts.
@@ -130,8 +159,24 @@ class ChatController extends StateNotifier<ChatState> {
         messages: [...state.messages, message],
         isSending: false,
       );
+      _persistMessages();
     } catch (_) {
       state = state.copyWith(isSending: false);
+    }
+  }
+
+  /// Delete a single message by its ID.
+  void deleteMessage(String id) {
+    final filtered = state.messages.where((m) => m.id != id).toList();
+    state = state.copyWith(messages: filtered);
+    _persistMessages();
+  }
+
+  /// Delete all messages for the active group and remove the persisted file.
+  Future<void> clearAllMessages() async {
+    state = state.copyWith(messages: []);
+    if (_groupId != null) {
+      await _storageService?.deleteAllMessages(_groupId);
     }
   }
 

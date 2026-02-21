@@ -124,6 +124,25 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     ref.read(activeGroupProvider.notifier).state = null;
                   },
                 ),
+              const Divider(height: 1),
+              const Padding(
+                padding: EdgeInsets.fromLTRB(20, 12, 20, 8),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Chat',
+                    style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ),
+              ListTile(
+                leading: Icon(Icons.delete_sweep_outlined, color: Colors.red[400]),
+                title: Text('Clear Chat', style: TextStyle(color: Colors.red[400])),
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  _confirmClearChat();
+                },
+              ),
               const SizedBox(height: 8),
             ],
           ),
@@ -169,6 +188,62 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     await ref.read(userProfileManagerProvider).setName(trimmed);
     ref.read(displayNameProvider.notifier).state = trimmed;
     if (ctx.mounted) Navigator.of(ctx).pop();
+  }
+
+  /// Show confirmation dialog before clearing all messages.
+  void _confirmClearChat() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Clear chat?'),
+        content: const Text(
+          'All messages will be permanently deleted from this device.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              ref.read(chatControllerProvider.notifier).clearAllMessages();
+            },
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.red[400],
+            ),
+            child: const Text('Clear'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Show confirmation dialog before deleting a single message.
+  void _confirmDeleteMessage(String messageId) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete message?'),
+        content: const Text('This message will be removed from this device.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              ref.read(chatControllerProvider.notifier).deleteMessage(messageId);
+            },
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.red[400],
+            ),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -255,7 +330,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                         ),
                         itemCount: messages.length,
                         itemBuilder: (context, index) {
-                          return _MessageBubble(message: messages[index]);
+                          return _MessageBubble(
+                            message: messages[index],
+                            onLongPress: () =>
+                                _confirmDeleteMessage(messages[index].id),
+                          );
                         },
                       ),
           ),
@@ -444,8 +523,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
 class _MessageBubble extends StatelessWidget {
   final ChatMessage message;
+  final VoidCallback? onLongPress;
 
-  const _MessageBubble({required this.message});
+  const _MessageBubble({required this.message, this.onLongPress});
 
   @override
   Widget build(BuildContext context) {
@@ -454,7 +534,9 @@ class _MessageBubble extends StatelessWidget {
 
     return Align(
       alignment: isLocal ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
+      child: GestureDetector(
+        onLongPress: onLongPress,
+        child: Container(
         margin: const EdgeInsets.only(bottom: 10),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         constraints: BoxConstraints(
@@ -534,6 +616,7 @@ class _MessageBubble extends StatelessWidget {
           ],
         ),
       ),
+    ),
     );
   }
 

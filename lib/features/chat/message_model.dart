@@ -77,4 +77,33 @@ class ChatMessage {
       readBy: readBy ?? this.readBy,
     );
   }
+
+  /// Serialize to a JSON-compatible map for local persistence.
+  ///
+  /// [deliveredTo] and [readBy] are transient session data and are not
+  /// included in the serialized output.
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'sender': sender.hex,
+      'senderName': senderName,
+      'text': text,
+      'timestamp': timestamp.toIso8601String(),
+      'isLocal': isLocal,
+      'status': status.name,
+    };
+  }
+
+  /// Deserialize a [ChatMessage] from a JSON map produced by [toJson].
+  factory ChatMessage.fromJson(Map<String, dynamic> json) {
+    return ChatMessage(
+      id: json['id'] as String,
+      sender: PeerId.fromHex(json['sender'] as String),
+      senderName: json['senderName'] as String? ?? '',
+      text: json['text'] as String,
+      timestamp: DateTime.parse(json['timestamp'] as String),
+      isLocal: json['isLocal'] as bool? ?? false,
+      status: MessageStatus.values.byName(json['status'] as String? ?? 'sent'),
+    );
+  }
 }

@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/identity/peer_id.dart';
 import '../../core/providers/group_providers.dart';
 import '../../core/providers/profile_providers.dart';
+import '../../core/services/message_storage_service.dart';
 import '../../core/services/receipt_service.dart';
 import '../../core/transport/transport.dart';
 import '../../core/transport/transport_config.dart';
@@ -74,15 +75,28 @@ final chatRepositoryProvider = Provider<ChatRepository>((ref) {
   return repository;
 });
 
+/// Provides the [MessageStorageService] for local message persistence.
+final messageStorageServiceProvider = Provider<MessageStorageService>((ref) {
+  return MessageStorageService();
+});
+
 /// Provides the [ChatController] StateNotifier.
+///
+/// Watches [activeGroupProvider] so the controller (and its persisted
+/// messages) are rebuilt whenever the user creates, joins, or leaves a group.
 final chatControllerProvider =
     StateNotifierProvider<ChatController, ChatState>((ref) {
   final repository = ref.watch(chatRepositoryProvider);
   final myPeerId = ref.watch(myPeerIdProvider);
+  final storageService = ref.watch(messageStorageServiceProvider);
+  final activeGroup = ref.watch(activeGroupProvider);
   return ChatController(
     repository: repository,
     myPeerId: myPeerId,
     // Read at send time so name changes are reflected immediately.
     getDisplayName: () => ref.read(displayNameProvider),
+    storageService: storageService,
+    groupId: activeGroup?.id,
   );
 });
+
