@@ -5,7 +5,331 @@ Each entry records **what** changed, **which files** were affected, and **why** 
 
 ---
 
-## [v2.3] — Incoming Message Notification Sound
+## [v2.5] — Device Terminal Feature + CLAUDE.md Documentation Update
+**Date:** 2026-02-23
+**Branch:** `v2`
+**Status:** In progress (uncommitted)
+
+### Summary
+Added a new Device Terminal feature for debugging and communicating with external Fluxon hardware devices over BLE. This feature includes scanning for BLE devices, establishing connections, and sending/receiving raw serial data with both text and hexadecimal display modes. Also significantly expanded CLAUDE.md with architectural diagrams, command references, and comprehensive module descriptions.
+
+---
+
+### Changes
+
+#### 1. New Device Terminal Feature — `lib/features/device_terminal/` *(new)*
+
+**Files created:**
+- `device_terminal_screen.dart` — Terminal UI with device scanner, connection controls, message log with switchable display modes (text/hex)
+- `device_terminal_controller.dart` — StateNotifier<DeviceTerminalState>, manages BLE device lifecycle and message history
+- `device_terminal_model.dart` — Data classes: TerminalMessage (with direction, data, timestamp), ScannedDevice (with RSSI), and enums (TerminalDirection, TerminalDisplayMode, DeviceConnectionStatus)
+- `device_terminal_providers.dart` — Riverpod provider for device terminal controller
+- `data/device_terminal_repository.dart` — Abstract repository interface
+- `data/ble_device_terminal_repository.dart` — Concrete BLE implementation with direct device communication (bypasses mesh)
+
+**What changed:**
+- New feature allows developers to interact with Fluxon hardware in real-time without going through the mesh network
+- Terminal displays incoming/outgoing data as UTF-8 text or hex bytes with timestamps
+- Scan results show discovered BLE devices with RSSI signal strength
+- Connection state transitions: disconnected → scanning → connecting → connected → disconnecting
+
+**Why:**
+Device terminal is essential for firmware debugging, hardware protocol validation, and end-to-end testing of the Fluxon device. It provides a low-level interface to test raw BLE communication separate from the mesh networking logic.
+
+---
+
+#### 2. App Navigation Integration — `lib/app.dart`
+
+**What changed:**
+- Added import for `DeviceTerminalScreen`
+- Added `DeviceTerminalScreen()` to the `_screens` list (fourth tab)
+- Added `NavigationDestination` with icon `Icons.developer_board` (outline/filled) and label 'Device'
+
+**Why:**
+Integrates the device terminal into the main bottom navigation bar alongside Chat, Location, and Emergency features for easy access during development and testing.
+
+---
+
+#### 3. Test Files Added
+
+**Files created:**
+- `test/features/device_terminal_controller_test.dart` — Unit tests for DeviceTerminalController state management and lifecycle
+- `test/features/device_terminal_model_test.dart` — Unit tests for TerminalMessage rendering (text/hex views) and ScannedDevice data
+
+**Why:**
+Ensures the device terminal state management and data model are robust and correctly handle message formatting, connection state transitions, and display mode switching.
+
+---
+
+#### 4. CLAUDE.md Comprehensive Documentation Update
+
+**What changed:**
+- Added "Quick Start" section with copy-paste-ready commands (flutter test, flutter run, flutter analyze, etc.)
+- Added "High-Level Architecture" diagram showing data flow from UI through controllers to core infrastructure
+- Expanded "Project Structure" with inline comments and new device_terminal feature
+- Rewrote "Architecture Patterns" section with subsections for DIP, Riverpod DI, Cryptography, and Data Flow
+- Added "Core Modules (Detailed)" section breaking down Transport, Mesh Service, Cryptography, Protocol, and Services
+- Added "Startup Sequence" with 12 clear steps and explanations
+- Added "App Routing" section describing navigation logic
+- Enhanced "Wire Protocol" table with all message types
+- Added "Code Conventions" section
+- Added "Testing" section with command examples
+- Added "Phase Completion Status" table
+- Added "Key Files to Read First" onboarding guide
+- Added "Troubleshooting" table with common issues
+- Updated tech stack documentation and references
+
+**Why:**
+The original CLAUDE.md was comprehensive but needed reorganization for clarity and up-to-date documentation of Phase 4 features (notification sound, message storage, receipt service, device terminal). The new structure follows a clearer onboarding flow: Quick Start → Overview → Architecture → Modules → Key Files → Testing → Troubleshooting.
+
+---
+
+### What Did NOT Change
+- All mesh networking logic (`lib/core/mesh/`, `lib/core/transport/`) — **unchanged**
+- Cryptography layer (`lib/core/crypto/`) — **unchanged**
+- Chat, Location, Emergency features — **unchanged**
+- Group management, identity, protocol — **unchanged**
+- Wire protocol, BLE UUIDs, packet format — **unchanged**
+
+---
+
+## [v2.4] — Message Persistence to Local Storage
+**Date:** 2026-02-22
+**Branch:** `v2`
+
+### Summary
+Added persistent storage of chat messages per-group to the device's local file system. Each group gets its own JSON file in the app's documents directory, allowing chat history to survive app restarts and be recovered when the user rejoins a group.
+
+---
+
+### Changes
+
+#### 1. Message Storage Service — `lib/core/services/message_storage_service.dart` *(new)*
+
+**What changed:**
+- New `MessageStorageService` class for persisting chat messages
+- `loadMessages(groupId)` — Loads all persisted messages for a specific group from disk
+- `saveMessages(groupId, messages)` — Writes full message list to disk as JSON
+- `getFileForGroup(groupId)` — Resolves the per-group file path with sanitized group ID
+- Caches directory path to avoid repeated lookups
+
+**Why:**
+Off-grid mesh chat naturally operates in bursts (short message volumes between periods of no connectivity). Persisting messages per-group allows users to review conversation history and pick up where they left off without losing context when the app closes or the device restarts.
+
+---
+
+#### 2. Chat Message Model Enhancement — `lib/features/chat/message_model.dart`
+
+**What changed:**
+- Added `fromJson()` and `toJson()` serialization methods to `ChatMessage` class
+- Updated message data class with proper JSON encoding/decoding for persistence
+
+**Why:**
+Enables `MessageStorageService` to save and restore messages from JSON files without additional conversion logic.
+
+---
+
+#### 3. Chat Controller Integration — `lib/features/chat/chat_controller.dart`
+
+**What changed:**
+- Added `MessageStorageService` dependency injection
+- On app startup or group switch: load messages from storage via `messageStorageService.loadMessages(groupId)`
+- After sending or receiving a message: automatically save messages to disk via `messageStorageService.saveMessages(groupId, messages)`
+
+**Why:**
+Automates persistence — users don't need to manually save messages. All chat history is automatically captured and restored.
+
+---
+
+#### 4. Chat Screen Display — `lib/features/chat/chat_screen.dart`
+
+**What changed:**
+- Chat screen now displays loaded persisted messages from the current session
+- Message list shows both remote and locally-sent messages in chronological order
+
+**Why:**
+Users see their full conversation history when opening the chat, not just messages received in the current app session.
+
+---
+
+#### 5. Chat Providers Setup — `lib/features/chat/chat_providers.dart`
+
+**What changed:**
+- Added `messageStorageServiceProvider` to expose `MessageStorageService` to the DI container
+- Wired message loading logic into controller initialization
+
+**Why:**
+Follows dependency inversion — controllers and repositories depend on the provider, not on direct file access.
+
+---
+
+#### 6. Comprehensive Test Suite — `test/services/message_storage_service_test.dart` *(new)*
+
+**Test cases (211 lines):**
+- File creation and directory resolution
+- Load messages from empty/nonexistent files
+- Save and restore messages with full round-trip JSON serialization
+- Message ordering and timestamp preservation
+- Group ID sanitization (safe filenames)
+- Error handling for corrupted JSON files
+
+**Why:**
+Storage is critical infrastructure. Extensive tests ensure messages are never lost due to serialization bugs, corrupted files, or edge cases in file I/O.
+
+---
+
+### What Did NOT Change
+- All transport/mesh logic — **unchanged**
+- Cryptography layer — **unchanged**
+- Location, Emergency, Group features — **unchanged**
+- Wire protocol — **unchanged**
+- Message receipt tracking (double-tick) — separate feature in v2.3
+
+---
+
+## [v2.3] — Message Receipt Indicators + Notification Sound
+**Date:** 2026-02-20
+**Branch:** `v2`
+
+### Summary
+Phase 4 delivery includes two major enhancements: message receipt tracking (double-tick indicators like WhatsApp) and incoming message notification sound. The receipt system tracks delivery status per-message, and the notification sound (two-tone chime) plays when non-local messages arrive.
+
+---
+
+### Changes
+
+#### 1. Message Receipt Service — `lib/core/services/receipt_service.dart` *(new)*
+
+**What changed:**
+- New `ReceiptService` class for tracking message delivery status
+- Enum `ReceiptStatus`: none, sent, delivered, read
+- Methods: `trackSent()`, `markDelivered()`, `markRead()`, `getStatus()`, `getReceiptFor(messageId)`
+- Internally uses a Map with periodic cleanup of old receipts (5-minute window)
+
+**Why:**
+Double-tick indicators (like WhatsApp) require tracking when each message was sent, delivered to another peer, and read by the recipient. The service provides a clean API for controllers to update and query receipt status.
+
+---
+
+#### 2. Receipt Codec — `lib/core/protocol/binary_protocol.dart`
+
+**What changed:**
+- Added `ReceiptPayload` class with `messageId`, `status`, and `timestamp` fields
+- Added `encodeReceiptPayload()` and `decodeReceiptPayload()` for binary serialization
+- Receipt payloads are sent as a new message type (0x0F internally, mapped in MeshChatRepository)
+
+**Why:**
+Peers need to acknowledge message delivery. The receipt codec handles binary encoding/decoding so receipts can be transmitted over BLE and processed by the mesh network.
+
+---
+
+#### 3. Chat Message Model Enhancement — `lib/features/chat/message_model.dart`
+
+**What changed:**
+- Added `receiptStatus` field to `ChatMessage` class
+- Added `copyWith()` parameter for `receiptStatus`
+- Display helpers: `get twoTickCount()` (returns tick count: 0, 1, or 2)
+
+**Why:**
+Chat messages now carry their delivery status, allowing the UI to display the appropriate tick indicator (✓ sent, ✓✓ delivered, etc.).
+
+---
+
+#### 4. Chat Controller Receipt Tracking — `lib/features/chat/chat_controller.dart`
+
+**What changed:**
+- Injected `ReceiptService` dependency
+- On `sendMessage()`: call `receiptService.trackSent(messageId)` and mark message with `ReceiptStatus.sent`
+- Listener on incoming message stream: when a receipt packet arrives for a message ID, call `receiptService.markDelivered(messageId)` and update the message in state
+- After message is displayed for 5 seconds: call `receiptService.markRead(messageId)`
+
+**Why:**
+Controller orchestrates the full lifecycle: track sent → listen for delivery acknowledgment → mark read. This keeps business logic in the controller, separate from UI.
+
+---
+
+#### 5. Chat Repository Interface — `lib/features/chat/data/chat_repository.dart`
+
+**What changed:**
+- Added `onReceiptReceived()` — Stream of incoming receipt packets
+- Added `sendReceipt(messageId, status)` — Method to send a receipt back to sender
+
+**Why:**
+Repositories abstract the mesh communication layer. Controllers call these methods without knowing about protocol details.
+
+---
+
+#### 6. Mesh Chat Repository Implementation — `lib/features/chat/data/mesh_chat_repository.dart`
+
+**What changed:**
+- Implemented `onReceiptReceived()` by filtering MeshService packets by type (receipt codec)
+- Implemented `sendReceipt()` by encoding receipt payload and broadcasting via MeshService
+
+**Why:**
+Concrete implementation bridges the abstract interface to the actual mesh network and protocol encoding.
+
+---
+
+#### 7. Chat Screen Display — `lib/features/chat/chat_screen.dart`
+
+**What changed:**
+- Message bubbles now display tick indicators based on `message.receiptStatus`
+- Single tick (✓) for sent, double tick (✓✓) for delivered
+- Ticks displayed to the right of the timestamp in message bubble
+
+**Why:**
+Users expect visual feedback on message delivery status (standard in modern messaging apps).
+
+---
+
+#### 8. Notification Sound Service — `lib/core/services/notification_sound.dart` *(new)*
+
+**What changed:**
+- New `NotificationSoundService` class
+- Generates 200ms two-tone WAV (A5 → C6) at runtime on first call
+- Tone is cached in temp directory for reuse
+- `play()` plays the sound; `dispose()` releases the AudioPlayer
+
+**Why:**
+Incoming messages need audible feedback. Runtime generation avoids bundling audio assets.
+
+---
+
+#### 9. Chat Screen Sound Integration — `lib/features/chat/chat_screen.dart`
+
+**What changed:**
+- Instantiate `NotificationSoundService` in state
+- Use `ref.listen<ChatState>()` to detect new incoming messages
+- Call `notificationSound.play()` when a new non-local message arrives
+
+**Why:**
+Audible notifications alert the user to incoming messages even when the app is in the foreground but the user isn't actively reading the chat.
+
+---
+
+#### 10. Comprehensive Test Suite
+
+**Files created:**
+- `test/core/services/receipt_service_test.dart` (476 lines) — Full receipt service lifecycle, cleanup, edge cases
+- `test/core/protocol/receipt_codec_test.dart` (108 lines) — Binary encoding/decoding of receipt payloads
+- `test/features/chat_controller_test.dart` (387 lines) — Controller receipt handling, state updates, listener integration
+- `test/features/chat_repository_test.dart` (155 lines) — Repository receipt send/receive
+- `test/features/message_model_test.dart` (208 lines) — Message model with receipt status
+- `test/features/receipt_integration_test.dart` (591 lines) — Full flow: send → receive receipt → update UI
+- Updates to existing tests: BLE transport, mesh relay, stub transport, identity manager, widget test
+
+**Why:**
+Receipt tracking is critical to the user experience and involves multiple layers (service, protocol, controller, repository, UI). Extensive tests ensure receipts are correctly tracked, sent, received, and displayed.
+
+---
+
+### What Did NOT Change
+- All transport/mesh logic — **unchanged**
+- Cryptography layer — **unchanged**
+- Location, Emergency, Group features — **unchanged**
+- Wire protocol format (except receipt codec addition) — **unchanged**
+
+---
 **Date:** 2026-02-20
 **Branch:** `v2`
 

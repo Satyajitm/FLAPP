@@ -5,6 +5,7 @@ import 'core/providers/profile_providers.dart';
 import 'core/services/foreground_service_manager.dart';
 import 'features/chat/chat_screen.dart';
 import 'features/location/location_screen.dart';
+import 'features/device_terminal/device_terminal_screen.dart';
 import 'features/emergency/emergency_screen.dart';
 import 'features/group/create_group_screen.dart';
 import 'features/group/join_group_screen.dart';
@@ -98,6 +99,7 @@ class _HomeScreenState extends State<_HomeScreen> with WidgetsBindingObserver {
     ChatScreen(),
     LocationScreen(),
     EmergencyScreen(),
+    DeviceTerminalScreen(),
   ];
 
   @override
@@ -125,6 +127,11 @@ class _HomeScreenState extends State<_HomeScreen> with WidgetsBindingObserver {
             icon: Icon(Icons.sos_outlined),
             selectedIcon: Icon(Icons.sos),
             label: 'SOS',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.developer_board_outlined),
+            selectedIcon: Icon(Icons.developer_board),
+            label: 'Device',
           ),
         ],
       ),

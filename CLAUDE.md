@@ -1,10 +1,38 @@
-# CLAUDE.md — FluxonApp
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Quick Start
+
+```bash
+# Install dependencies
+flutter pub get
+
+# Run the app on a connected device or emulator
+flutter run
+
+# Run all tests (46 test files)
+flutter test
+
+# Run specific test directory
+flutter test test/core/
+flutter test test/features/
+
+# Run a single test file
+flutter test test/core/deduplicator_test.dart
+
+# Analyze code for lint issues
+flutter analyze
+
+# Get test coverage (requires lcov)
+flutter test --coverage
+```
 
 ## What is FluxonApp?
 
 FluxonApp is a Flutter mobile app for **off-grid, BLE mesh networking**. It enables phone-to-phone group chat, real-time location sharing, and emergency SOS alerts — all peer-to-peer without internet. Adapted from the Bitchat protocol with Fluxonlink-specific additions.
 
-**Current status:** Phase 4 complete. 39 test files, all passing. Zero compile errors.
+**Current status:** Phase 4 complete. 46 test files, all passing. Zero compile errors.
 
 ## Tech Stack
 
@@ -20,7 +48,36 @@ FluxonApp is a Flutter mobile app for **off-grid, BLE mesh networking**. It enab
 - **path_provider** — system cache directory for tile storage
 - **flutter_secure_storage** — encrypted key, group, and profile persistence
 - **flutter_foreground_task** — Android foreground service for background BLE relay
+- **audioplayers** — notification sound playback (two-tone chime on incoming messages)
 - **archive** — compression (declared but not yet actively used)
+
+## High-Level Architecture
+
+```
+UI Layer (Features)
+  ├─ Chat (group messaging, display names)
+  ├─ Location (GPS sharing, OpenStreetMap)
+  ├─ Emergency (SOS alerts)
+  ├─ Group (create/join group screens)
+  ├─ Onboarding (first-run display name entry)
+  └─ Device Terminal (debug serial console for Fluxon hardware)
+        ↓
+Controllers & Riverpod State Management
+  ├─ StateNotifier-based controllers
+  └─ Reactive providers for shared infrastructure
+        ↓
+Data Layer (Repositories)
+  ├─ Abstract repository interfaces
+  └─ Concrete mesh implementations
+        ↓
+Core Infrastructure
+  ├─ Transport (BLE scanning/advertising, multi-hop relay via MeshService)
+  ├─ Mesh Networking (relay, deduplication, topology tracking)
+  ├─ Cryptography (Noise XX session layer, Ed25519 packet signing, ChaCha20-Poly1305 group encryption)
+  ├─ Identity (peer ID derivation, group management, secure key storage)
+  ├─ Protocol (binary packet encoding/decoding, message types)
+  └─ Services (foreground service, notification sound, message persistence, receipt tracking)
+```
 
 ## Project Structure
 
@@ -58,6 +115,9 @@ lib/
       device_services.dart          #   GpsService / PermissionService interfaces
     services/                       # Platform services
       foreground_service_manager.dart #   Android foreground service for background BLE relay
+      notification_sound.dart       #   Generates and plays notification chimes on incoming messages
+      message_storage_service.dart  #   Persists chat messages per-group to local JSON files
+      receipt_service.dart          #   Tracks message delivery status (double-tick indicators)
     protocol/                       # Wire format
       message_types.dart            #   Enum of all packet types (0x01–0x0E)
       packet.dart                   #   FluxonPacket encode/decode
@@ -100,12 +160,20 @@ lib/
     group/
       create_group_screen.dart      #   Group creation UI (hero icon, passphrase visibility toggle)
       join_group_screen.dart        #   Group join UI (hero icon, loading state)
+    device_terminal/               # Hardware debug console (NEW in Phase 4)
+      device_terminal_screen.dart   #   Terminal UI (scan/connect, text/hex display)
+      device_terminal_controller.dart # StateNotifier<DeviceTerminalState>, BLE lifecycle management
+      device_terminal_providers.dart #   Riverpod providers for device terminal
+      device_terminal_model.dart    #   TerminalMessage, ScannedDevice, enums (direction, display mode, connection status)
+      data/
+        device_terminal_repository.dart  #   Abstract interface
+        ble_device_terminal_repository.dart # Direct BLE communication (bypasses mesh)
 test/
   core/                             # 26 test files: mesh, crypto, protocol, transport, services
-  features/                         # 11 test files: controllers, repositories, screens, lifecycle
+  features/                         # 11+ test files: controllers, repositories, screens, lifecycle
   shared/                           # Utility tests (geo_math)
+  services/                         # Service tests
   widget_test.dart                  # Root widget smoke test
-  integration_test/                 # On-device crypto validation
 ```
 
 ## Architecture Patterns
@@ -115,18 +183,19 @@ Each feature follows: `Screen -> Controller (StateNotifier) -> Repository (abstr
 
 ### Dependency Inversion (DIP)
 Every external dependency is behind an abstract interface:
-- `Transport` (abstract) <- `BleTransport` (BLE) / `StubTransport` (tests & desktop)
-- `Transport` (abstract) <- `MeshService` (wraps raw transport with multi-hop relay)
-- `ChatRepository` <- `MeshChatRepository`
-- `LocationRepository` <- `MeshLocationRepository`
-- `EmergencyRepository` <- `MeshEmergencyRepository`
-- `GpsService` <- `GeolocatorGpsService`
-- `PermissionService` <- `GeolocatorPermissionService`
+- `Transport` (abstract) ← `BleTransport` (BLE) / `StubTransport` (tests & desktop)
+- `Transport` (abstract) ← `MeshService` (wraps raw transport with multi-hop relay)
+- `ChatRepository` ← `MeshChatRepository`
+- `LocationRepository` ← `MeshLocationRepository`
+- `EmergencyRepository` ← `MeshEmergencyRepository`
+- `DeviceTerminalRepository` ← `BleDeviceTerminalRepository`
+- `GpsService` ← `GeolocatorGpsService`
+- `PermissionService` ← `GeolocatorPermissionService`
 
 ### Riverpod DI
 Infrastructure providers (`transportProvider`, `myPeerIdProvider`) are defined in `chat_providers.dart` and `groupManagerProvider` in `core/providers/group_providers.dart` — all with `throw UnimplementedError()`. They **must** be overridden via `ProviderScope` overrides at the app root (`main.dart` does this).
 
-Additional providers added in Phase 4:
+Additional providers in Phase 4+:
 - `activeGroupProvider` — `StateProvider<FluxonGroup?>` that bridges imperative `GroupManager` mutations with Riverpod's reactive system
 - `userProfileManagerProvider` + `displayNameProvider` — reactive user display name state
 
@@ -136,46 +205,86 @@ Additional providers added in Phase 4:
 3. **Packet auth**: Ed25519 detached signatures on every packet (signing keys distributed via Noise handshake messages 2 & 3)
 
 ### Stream-Based Reactive Data Flow
-`BleTransport` -> `MeshService` (relay/dedup/topology filtering) -> `Stream<FluxonPacket>` -> Repositories filter by MessageType -> Controllers subscribe and update StateNotifier state -> UI rebuilds via Riverpod.
+`BleTransport` → `MeshService` (relay/dedup/topology filtering) → `Stream<FluxonPacket>` → Repositories filter by MessageType → Controllers subscribe and update StateNotifier state → UI rebuilds via Riverpod.
 
-## Startup Sequence (main.dart)
+## Core Modules (Detailed)
 
-1. `WidgetsFlutterBinding.ensureInitialized()`
-2. `await initSodium()` — initializes global `SodiumSumo` instance
-3. `ForegroundServiceManager.initialize()` — configures Android foreground service
-4. `IdentityManager` — generates/loads persistent Curve25519 keypair, derives `PeerId`
-5. `UserProfileManager` — loads persisted display name from secure storage
-6. `GroupManager` + `await groupManager.initialize()` — restores persisted group from secure storage
-7. Platform-conditional transport: `BleTransport` on Android/iOS, `StubTransport` on desktop
-8. Raw transport wrapped with `MeshService` for multi-hop relay
-9. `ProviderScope` overrides: `transportProvider`, `myPeerIdProvider`, `groupManagerProvider`, `userProfileManagerProvider`, `displayNameProvider`
-10. BLE starts after first frame via `addPostFrameCallback` (avoids startup freeze on permission dialogs)
-11. Foreground service starts on app resume, stops only on `AppLifecycleState.detached`
+### Transport (`lib/core/transport/`)
+Abstract `Transport` interface implemented by:
+- `BleTransport` — Central + peripheral BLE roles, handles scanning, advertising, GATT connections
+- `StubTransport` — Test double with loopback, packet capture, and peer simulation (used on desktop/tests)
 
-## App Routing
+Key constants in `transport_config.dart`:
+- Max TTL: 7 hops
+- Fragment size: 469 bytes
+- Dedup cache: 1000 entries / 300s TTL
+- Location broadcast: 10s
+- Emergency rebroadcast: 3x with 500ms spacing
+- BLE scan interval: 2000ms
+- Duty-cycle: 5s ON / 10s OFF when idle (>30s no activity)
+- Max central links: 6 (iOS limit)
 
-- `FluxonApp` (`app.dart`) is a `ConsumerWidget` that watches `displayNameProvider`
-- If display name is empty → renders `OnboardingScreen` (first-run name entry)
-- Otherwise → renders `_HomeScreen` with bottom nav (Chat / Map / SOS)
-- Named routes: `/create-group`, `/join-group`
+### Mesh Service (`lib/core/mesh/`)
+Wraps raw transport with multi-hop relay orchestration:
+- **MeshService** — Decides relay (flood control, TTL, topology), applies dedup, filters by topology
+- **RelayController** — Implements relay decisions (flood vs unicast, TTL checks)
+- **Deduplicator** — LRU + time-based dedup (key: source:timestamp:type)
+- **TopologyTracker** — BFS routing graph, link-state propagation
+- **GossipSync** — Anti-entropy gap-filling for missed packets
 
-## Wire Protocol
+### Cryptography (`lib/core/crypto/`)
+- **SodiumInstance** — Global libsodium (Sumo) singleton, initialized once in `main.dart`
+- **Noise XX** — Full X25519 + ChaCha20-Poly1305 + SHA256 handshake implementation
+- **NoiseSessionManager** — Manages per-peer-pair Noise XX state machines
+- **Ed25519 Signatures** — Packet authentication (detached signatures, keys distributed in Noise messages 2 & 3)
+- **GroupCipher** — Group-level ChaCha20-Poly1305 encryption derived from Argon2id
 
+### Protocol (`lib/core/protocol/`)
 Binary packet format (big-endian):
 ```
 [version:1][type:1][ttl:1][flags:1][timestamp:8][sourceId:32][destId:32][payloadLen:2][payload:N][signature:64]
 ```
 - Header: 78 bytes, signature: 64 bytes
 - Max TTL: 7, max payload: 512 bytes
-- Broadcast = destId all zeros
-- Packet ID (dedup key) = `sourceId:timestamp:type`
+- Broadcast: destId all zeros
+- Packet ID (dedup key): sourceId:timestamp:type
 
-### Chat Payload Format
-- JSON encoding when senderName is present: `{"n":"Alice","t":"Hello"}`
+Chat payload format:
+- JSON with sender name: `{"n":"Alice","t":"Hello"}` (when senderName present)
 - Plain UTF-8 fallback for legacy/empty names
-- Detection via `{"n":` prefix for backward compatibility
+- Detection via `{"n":` prefix
 
-### Message Types (0x01–0x0E)
+### Services (`lib/core/services/`)
+- **ForegroundServiceManager** — Android background BLE relay (prevents process termination on background)
+- **NotificationSoundService** — Generates 200ms two-tone chime (A5 → C6) in WAV, plays on non-local incoming chat messages
+- **MessageStorageService** — Persists chat messages to per-group JSON files in app documents directory
+- **ReceiptService** — Tracks and broadcasts message delivery status (double-tick indicators like WhatsApp)
+
+## Startup Sequence (main.dart)
+
+1. `FlutterForegroundTask.initCommunicationPort()` — Initialize foreground service port (web-guarded)
+2. `WidgetsFlutterBinding.ensureInitialized()`
+3. `ForegroundServiceManager.initialize()` — Configure Android foreground service
+4. `await initSodium()` — Initialize global `SodiumSumo` instance
+5. `IdentityManager.initialize()` — Generate/load persistent Curve25519 keypair, derive `PeerId`
+6. `GroupManager.initialize()` — Restore persisted group membership
+7. `UserProfileManager.initialize()` — Load/create persistent display name
+8. Select transport: `BleTransport` (Android/iOS) or `StubTransport` (desktop/test)
+9. Wrap with `MeshService` for multi-hop relay
+10. `ProviderScope` overrides: `transportProvider`, `myPeerIdProvider`, `groupManagerProvider`, `userProfileManagerProvider`, `displayNameProvider`
+11. Run app
+12. After first frame: `_startBle(transport)` — Start BLE and foreground service asynchronously (avoids blocking permission dialogs)
+
+## App Routing
+
+- `FluxonApp` (`app.dart`) is a `ConsumerWidget` that watches `displayNameProvider`
+- If display name is empty → renders `OnboardingScreen` (first-run name entry)
+- Otherwise → renders `_HomeScreen` with bottom nav (Chat / Map / SOS / Device Terminal)
+- Named routes: `/create-group`, `/join-group`
+
+## Wire Protocol
+
+Binary packet format with message types 0x01–0x0E:
 
 | Value | Name | Origin | Description |
 |---|---|---|---|
@@ -187,40 +296,14 @@ Binary packet format (big-endian):
 | 0x06 | ping | Bitchat | Keepalive |
 | 0x07 | pong | Bitchat | Keepalive response |
 | 0x08 | discovery | Bitchat | Peer discovery broadcast |
-| 0x09 | noiseEncrypted | Bitchat | Direct Noise-encrypted message (private, protocol only — no UI) |
+| 0x09 | noiseEncrypted | Bitchat | Direct Noise-encrypted message (protocol only, no UI) |
 | 0x0A | locationUpdate | Fluxonlink | GPS coordinate broadcast (group-encrypted) |
 | 0x0B | groupJoin | Fluxonlink | Group join request |
 | 0x0C | groupJoinResponse | Fluxonlink | Group join response |
 | 0x0D | groupKeyRotation | Fluxonlink | Group key rotation |
 | 0x0E | emergencyAlert | Fluxonlink | SOS broadcast (group-encrypted) |
 
-## Build & Run
-
-```bash
-flutter pub get
-flutter run                    # Run on connected device/emulator
-flutter test                   # Run all unit tests (~347 tests across 39 files)
-flutter test test/core/        # Run core tests only
-flutter test test/features/    # Run feature tests only
-```
-
-## Key Constants (TransportConfig)
-
-| Parameter | Default | Notes |
-|---|---|---|
-| Max TTL | 7 | Hop limit for flood routing |
-| Max central links | 6 | iOS BLE limit |
-| Fragment size | 469 bytes | ~512 MTU minus overhead |
-| Dedup cache | 1000 entries / 300s | Packet deduplication |
-| Location broadcast | 10s | GPS share interval |
-| Emergency rebroadcast | 3x / 500ms | SOS reliability |
-| BLE scan interval | 2000ms | Discovery cadence |
-| Topology freshness | configurable | Pruning timer for stale topology entries |
-| Duty-cycle scan ON | 5000ms | BLE scan ON duration when idle |
-| Duty-cycle scan OFF | 10000ms | BLE scan OFF duration when idle |
-| Idle threshold | 30s | Time without activity before entering duty-cycle mode |
-
-## BLE UUIDs
+## BLE Configuration
 
 - **Service UUID**: `F1DF0001-1234-5678-9ABC-DEF012345678`
 - **Characteristic UUID**: `F1DF0002-1234-5678-9ABC-DEF012345678`
@@ -228,15 +311,39 @@ flutter test test/features/    # Run feature tests only
 ## Platform Configuration
 
 ### Android (`AndroidManifest.xml`)
-- `BLUETOOTH_SCAN`, `BLUETOOTH_ADVERTISE`, `BLUETOOTH_CONNECT` (API 31+)
-- `ACCESS_FINE_LOCATION` (required for BLE scan)
-- `INTERNET` (required for OSM tile download)
-- `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_CONNECTED_DEVICE` (background BLE relay)
+- Permissions: `BLUETOOTH_SCAN`, `BLUETOOTH_ADVERTISE`, `BLUETOOTH_CONNECT` (API 31+), `ACCESS_FINE_LOCATION` (BLE scan), `INTERNET` (OSM tiles), `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_CONNECTED_DEVICE` (background relay)
 
 ### iOS (`Info.plist`)
-- `UIBackgroundModes`: `bluetooth-central`, `bluetooth-peripheral`, `location`
-- `NSBluetoothAlwaysUsageDescription`, `NSBluetoothPeripheralUsageDescription`
-- `NSLocationWhenInUseUsageDescription`, `NSLocationAlwaysAndWhenInUseUsageDescription`
+- Background modes: `bluetooth-central`, `bluetooth-peripheral`, `location`
+- Usage descriptions: NSBluetoothAlwaysUsageDescription, NSBluetoothPeripheralUsageDescription, NSLocationWhenInUseUsageDescription, NSLocationAlwaysAndWhenInUseUsageDescription
+
+## Code Conventions
+
+- **Immutable state**: Controllers use `copyWith` pattern on state classes
+- **SRP extraction**: Utility logic in dedicated classes (e.g., `GeoMath` from `LocationUpdate`, `GroupCipher` from `GroupManager`)
+- **No PII logging**: `SecureLogger` is used throughout — never log keys, peer IDs, or locations
+- **Packet types**: Defined in `MessageType` enum (0x01–0x0E)
+- **Tests**: Mirror the `lib/` structure under `test/`; use abstract interfaces for mocking
+- **Platform-conditional transport**: `BleTransport` on mobile, `StubTransport` on desktop/test
+- **Group-only UI**: Private chat protocol exists at repository level (`sendPrivateMessage`) but UI was removed in Phase 4
+- **Reactive group state**: Create/Join/Leave group actions update both `GroupManager` (imperative) and `activeGroupProvider` (Riverpod reactive)
+- **Display names**: Transmitted in JSON chat payload `{"n":"name","t":"text"}`, with plain UTF-8 fallback
+
+## Testing
+
+Run all tests:
+```bash
+flutter test
+```
+
+Run specific categories:
+```bash
+flutter test test/core/              # Transport, mesh, crypto, protocol
+flutter test test/features/          # Controllers, repositories, screens
+flutter test test/core/deduplicator_test.dart  # Single file
+```
+
+All 46 test files passing. Tests use `mocktail` for mocking with abstract interface-based dependency injection.
 
 ## Phase Completion Status
 
@@ -246,26 +353,34 @@ flutter test test/features/    # Run feature tests only
 | Phase 1.5 | Sodium API fixes, group infrastructure, main.dart overhaul | ✅ Complete |
 | Phase 2 | Multi-hop mesh (MeshService, relay, topology) | ✅ Complete |
 | Phase 3 | Noise XX encryption, signing key distribution, private chat protocol | ✅ Complete |
-| Phase 4 | Background relay, duty-cycle BLE, offline maps, UI redesign, user names, onboarding | ✅ Complete |
+| Phase 4 | Background relay, duty-cycle BLE, offline maps, UI redesign, user names, onboarding, notification sound, message storage, receipt service, device terminal | ✅ Complete |
 
 ## Known TODOs / Future Work (Phase 5+)
 
-- Message persistence: SQLite/Drift database for local chat/location history (currently in-memory only)
-- Multi-group support (switch between groups, or join multiple simultaneously)
-- Message delivery ACKs + read receipts (protocol `MessageType.ack` exists but no send/receive logic)
-- Fragment reassembly for payloads exceeding BLE MTU (if real devices negotiate MTU < 256)
-- End-to-end field test: 3-device mesh, app backgrounded on middle device, message still relays
-- Performance profiling: battery drain, memory footprint, relay latency under load
-- Shared infra providers (`transportProvider`, `myPeerIdProvider`) still live in `chat_providers.dart` — ideally should move to `core/providers/` (refactoring, not blocking)
+- Multi-group support: Switch between groups or join multiple simultaneously
+- Message delivery ACKs + read receipts: Protocol `MessageType.ack` exists but no send/receive logic
+- Fragment reassembly: For payloads exceeding BLE MTU (if real devices negotiate MTU < 256)
+- End-to-end field test: 3-device mesh, app backgrounded on middle device
+- Performance profiling: Battery drain, memory footprint, relay latency under load
+- Shared infra providers (`transportProvider`, `myPeerIdProvider`) still in `chat_providers.dart` — ideally move to `core/providers/`
 
-## Conventions
+## Key Files to Read First
 
-- **Immutable state**: Controllers use `copyWith` pattern on state classes
-- **SRP extraction**: Utility logic is extracted into dedicated classes (e.g., `GeoMath` from `LocationUpdate`, `GroupCipher` from `GroupManager`)
-- **No PII logging**: `SecureLogger` is used throughout — never log keys, peer IDs, or locations
-- **Packet types**: Defined in `MessageType` enum (0x01–0x0E)
-- **Tests**: Mirror the `lib/` structure under `test/`; use abstract interfaces for mocking
-- **Platform-conditional transport**: `BleTransport` on mobile, `StubTransport` on desktop/test
-- **Group-only UI**: Private chat protocol exists at repository level (`sendPrivateMessage`) but UI was removed in Phase 4 — FluxonApp is group-focused
-- **Reactive group state**: Create/Join/Leave group actions update both `GroupManager` (imperative) and `activeGroupProvider` (Riverpod reactive)
-- **Display names**: Transmitted in JSON chat payload `{"n":"name","t":"text"}`, with plain UTF-8 fallback
+When onboarding, read these in order:
+1. `lib/main.dart` — Startup and DI
+2. `lib/core/transport/transport.dart` — Abstract interface
+3. `lib/core/mesh/mesh_service.dart` — Relay orchestrator
+4. `lib/core/protocol/packet.dart` — Packet encoding
+5. `lib/features/chat/chat_screen.dart` — UI example
+6. `lib/features/chat/chat_controller.dart` — Controller pattern
+7. `test/core/deduplicator_test.dart` — Test example
+
+## Troubleshooting
+
+| Issue | Cause | Solution |
+|---|---|---|
+| Blank map in Location screen | Missing INTERNET permission or tile provider init | Check AndroidManifest.xml; provider has NetworkTileProvider fallback |
+| BLE won't connect | Permission denied or Bluetooth off | Verify runtime permissions; user must enable Bluetooth |
+| No incoming messages | Foreground service killed | Ensure foreground service starts after BLE, check Android settings |
+| Tests fail on Windows | StubTransport platform logic | Run on Android/iOS or update platform guards |
+| No notification sound | Audio permission or files in cache | Verify OS permissions; NotificationSoundService generates WAV on first use |
