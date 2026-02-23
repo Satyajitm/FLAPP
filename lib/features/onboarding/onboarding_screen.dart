@@ -25,8 +25,14 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     super.dispose();
   }
 
+  static const int _maxNameLength = 32;
+
   Future<void> _saveName() async {
-    final name = _nameController.text.trim();
+    final trimmed = _nameController.text.trim();
+    // Enforce max display name length of 32 characters.
+    final name = trimmed.length > _maxNameLength
+        ? trimmed.substring(0, _maxNameLength)
+        : trimmed;
     if (name.isEmpty) return;
 
     setState(() => _isSaving = true);
@@ -89,6 +95,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                 textCapitalization: TextCapitalization.words,
                 textInputAction: TextInputAction.done,
                 onSubmitted: (_) => _saveName(),
+                maxLength: _maxNameLength,
                 decoration: InputDecoration(
                   labelText: 'Your name',
                   hintText: 'e.g. Alex',

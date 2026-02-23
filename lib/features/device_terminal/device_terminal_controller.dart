@@ -126,14 +126,22 @@ class DeviceTerminalController extends StateNotifier<DeviceTerminalState> {
   }
 
   /// Send hex string as raw bytes to the device (e.g. "0A 1B FF").
-  Future<void> sendHex(String hexString) async {
+  ///
+  /// Returns false if [hexString] contains invalid hex characters.
+  Future<bool> sendHex(String hexString) async {
     final cleaned = hexString.replaceAll(RegExp(r'[\s,]'), '');
-    if (cleaned.isEmpty || cleaned.length.isOdd) return;
-    final data = Uint8List(cleaned.length ~/ 2);
-    for (var i = 0; i < data.length; i++) {
-      data[i] = int.parse(cleaned.substring(i * 2, i * 2 + 2), radix: 16);
+    if (cleaned.isEmpty || cleaned.length.isOdd) return false;
+    try {
+      final data = Uint8List(cleaned.length ~/ 2);
+      for (var i = 0; i < data.length; i++) {
+        data[i] = int.parse(cleaned.substring(i * 2, i * 2 + 2), radix: 16);
+      }
+      await _send(data);
+      return true;
+    } catch (_) {
+      // Invalid hex character — return false so caller can surface error UI.
+      return false;
     }
-    await _send(data);
   }
 
   Future<void> _send(Uint8List data) async {

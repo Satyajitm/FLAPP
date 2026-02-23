@@ -168,10 +168,20 @@ class MeshService implements Transport {
   // ---------------------------------------------------------------------------
 
   void _onPacketReceived(FluxonPacket packet) {
-    // Verify Ed25519 signature when sender's public key is available
-    if (packet.signature != null) {
+    // Enforce Ed25519 signature verification for non-handshake packets.
+    // Handshake packets are exempt because the signing key is exchanged during
+    // the handshake itself.
+    if (packet.type != MessageType.handshake) {
       final signingKey = _peerSigningKeys[HexUtils.encode(packet.sourceId)];
       if (signingKey != null) {
+        // We know this peer's signing key — the packet MUST carry a valid signature.
+        if (packet.signature == null) {
+          SecureLogger.warning(
+            'Packet from ${HexUtils.encode(packet.sourceId)} has no signature but signing key is known — dropping',
+            category: _cat,
+          );
+          return; // Drop unsigned packet from known peer
+        }
         final valid = Signatures.verify(
           packet.encode(),
           packet.signature!,
@@ -184,13 +194,16 @@ class MeshService implements Transport {
           );
           return; // Drop forged packet
         }
-      } else {
+      } else if (packet.signature != null) {
         // Signing key not yet available (handshake in progress or not yet started)
+        // Accept but log — cannot verify yet.
         SecureLogger.debug(
-          'Packet signed but signing key not yet known for ${HexUtils.encode(packet.sourceId)} — accepting',
+          'Packet signed but signing key not yet known for ${HexUtils.encode(packet.sourceId)} — accepting provisionally',
           category: _cat,
         );
       }
+      // If signingKey == null AND packet.signature == null: peer not yet known,
+      // allow through (e.g. discovery before handshake completes).
     }
 
     // Feed to gossip sync for gap-filling bookkeeping.

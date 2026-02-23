@@ -66,7 +66,7 @@ class _FakeGroupCipher implements GroupCipher {
       encrypt(data, groupKey);
 
   @override
-  Uint8List deriveGroupKey(String passphrase) {
+  Uint8List deriveGroupKey(String passphrase, Uint8List salt) {
     final key = Uint8List(32);
     final bytes = passphrase.codeUnits;
     for (var i = 0; i < 32; i++) {
@@ -78,6 +78,9 @@ class _FakeGroupCipher implements GroupCipher {
   @override
   String generateGroupId(String passphrase) =>
       'fake-group-${passphrase.hashCode.toRadixString(16)}';
+
+  @override
+  Uint8List generateSalt() => Uint8List(16); // Fixed salt for deterministic tests
 }
 
 class _FakeSecureStorage implements FlutterSecureStorage {

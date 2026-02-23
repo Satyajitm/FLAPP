@@ -12,7 +12,7 @@ void main() {
         type: MessageType.chat,
         ttl: 5,
         flags: 0,
-        timestamp: 1700000000000,
+        timestamp: DateTime.now().millisecondsSinceEpoch,
         sourceId: Uint8List(32)..fillRange(0, 32, 0xAA),
         destId: Uint8List(32), // broadcast
         payload: Uint8List.fromList([1, 2, 3, 4, 5]),
@@ -26,7 +26,7 @@ void main() {
       expect(decoded, isNotNull);
       expect(decoded!.type, equals(MessageType.chat));
       expect(decoded.ttl, equals(5));
-      expect(decoded.timestamp, equals(1700000000000));
+      expect(decoded.timestamp, equals(packet.timestamp));
       expect(decoded.payload, equals(Uint8List.fromList([1, 2, 3, 4, 5])));
     });
 
@@ -38,7 +38,7 @@ void main() {
       final directed = FluxonPacket(
         type: MessageType.chat,
         ttl: 5,
-        timestamp: 1700000000000,
+        timestamp: DateTime.now().millisecondsSinceEpoch,
         sourceId: Uint8List(32),
         destId: Uint8List(32)..fillRange(0, 32, 0xBB),
         payload: Uint8List(0),
@@ -63,7 +63,7 @@ void main() {
       final zeroTTL = FluxonPacket(
         type: MessageType.chat,
         ttl: 0,
-        timestamp: 1700000000000,
+        timestamp: DateTime.now().millisecondsSinceEpoch,
         sourceId: Uint8List(32),
         destId: Uint8List(32),
         payload: Uint8List(0),

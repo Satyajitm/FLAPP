@@ -24,7 +24,9 @@ class UserProfileManager {
   /// Save a new display name. Trims whitespace.
   /// Passing an empty string clears the stored name.
   Future<void> setName(String name) async {
-    _displayName = name.trim();
+    final trimmed = name.trim();
+    // Enforce max display name length of 32 characters.
+    _displayName = trimmed.length > 32 ? trimmed.substring(0, 32) : trimmed;
     if (_displayName.isEmpty) {
       await _storage.delete(key: _nameKey);
     } else {

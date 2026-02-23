@@ -10,7 +10,7 @@ void main() {
       final packet = FluxonPacket(
         type: MessageType.chat,
         ttl: 5,
-        timestamp: 1700000000000,
+        timestamp: DateTime.now().millisecondsSinceEpoch,
         sourceId: Uint8List(32),
         destId: Uint8List(32),
         payload: Uint8List(0),
@@ -24,7 +24,7 @@ void main() {
       final packet = FluxonPacket(
         type: MessageType.chat,
         ttl: 5,
-        timestamp: 1700000000000,
+        timestamp: DateTime.now().millisecondsSinceEpoch,
         sourceId: Uint8List(32)..fillRange(0, 32, 0xAA),
         destId: Uint8List(32),
         payload: Uint8List.fromList([1, 2, 3]),
@@ -51,7 +51,7 @@ void main() {
       final packet = FluxonPacket(
         type: MessageType.chat,
         ttl: 3,
-        timestamp: 1700000000000,
+        timestamp: DateTime.now().millisecondsSinceEpoch,
         sourceId: Uint8List(32)..fillRange(0, 32, 0xCC),
         destId: Uint8List(32),
         payload: Uint8List.fromList([10, 20]),
@@ -70,7 +70,7 @@ void main() {
       final packet = FluxonPacket(
         type: MessageType.chat,
         ttl: 5,
-        timestamp: 1700000000000,
+        timestamp: DateTime.now().millisecondsSinceEpoch,
         sourceId: Uint8List(32),
         destId: Uint8List(32),
         payload: Uint8List(0),
@@ -88,7 +88,7 @@ void main() {
         type: MessageType.emergencyAlert,
         ttl: 7,
         flags: 3,
-        timestamp: 1700000000000,
+        timestamp: DateTime.now().millisecondsSinceEpoch,
         sourceId: Uint8List(32)..fillRange(0, 32, 0x11),
         destId: Uint8List(32),
         payload: Uint8List.fromList([5, 10, 15]),

@@ -31,7 +31,13 @@ class _DeviceTerminalScreenState extends ConsumerState<DeviceTerminalScreen> {
     final controller = ref.read(deviceTerminalControllerProvider.notifier);
     final state = ref.read(deviceTerminalControllerProvider);
     if (state.displayMode == TerminalDisplayMode.hex) {
-      controller.sendHex(text);
+      controller.sendHex(text).then((success) {
+        if (!success && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Invalid hex input: use 0–9 and A–F characters only')),
+          );
+        }
+      });
     } else {
       controller.sendText(text);
     }

@@ -21,9 +21,17 @@ class _JoinGroupScreenState extends ConsumerState<JoinGroupScreen> {
     super.dispose();
   }
 
+  String? _passphraseError;
+
   void _joinGroup() {
     final passphrase = _passphraseController.text.trim();
     if (passphrase.isEmpty) return;
+
+    if (passphrase.length < 8) {
+      setState(() => _passphraseError = 'Passphrase must be at least 8 characters');
+      return;
+    }
+    setState(() => _passphraseError = null);
 
     setState(() => _isJoining = true);
     final group = ref.read(groupManagerProvider).joinGroup(passphrase);
@@ -91,6 +99,7 @@ class _JoinGroupScreenState extends ConsumerState<JoinGroupScreen> {
               obscureText: _obscurePassphrase,
               decoration: InputDecoration(
                 labelText: 'Group Passphrase',
+                errorText: _passphraseError,
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),

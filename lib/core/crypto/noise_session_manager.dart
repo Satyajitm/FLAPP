@@ -22,6 +22,12 @@ class NoiseSessionManager {
   /// Remote peers' Ed25519 signing public keys, keyed by BLE device ID.
   final Map<String, Uint8List> _peerSigningKeys = {};
 
+  /// Timestamp (ms since epoch) of the last handshake attempt per device.
+  final Map<String, int> _lastHandshakeTime = {};
+
+  /// Handshake attempt count within the current rate-limit window per device.
+  final Map<String, int> _handshakeAttempts = {};
+
   NoiseSessionManager({
     required Uint8List myStaticPrivKey,
     required Uint8List myStaticPubKey,
@@ -64,6 +70,17 @@ class NoiseSessionManager {
     String deviceId,
     Uint8List messageBytes,
   ) {
+    // Rate-limit incoming handshake attempts to prevent replay / DoS attacks.
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final lastTime = _lastHandshakeTime[deviceId] ?? 0;
+    if (now - lastTime < 60000) {
+      _handshakeAttempts[deviceId] = (_handshakeAttempts[deviceId] ?? 0) + 1;
+      if ((_handshakeAttempts[deviceId] ?? 0) > 5) return (response: null, remotePubKey: null, remoteSigningPublicKey: null); // Rate limit
+    } else {
+      _handshakeAttempts[deviceId] = 1;
+    }
+    _lastHandshakeTime[deviceId] = now;
+
     // If we have no pending state, this must be message 1 from a remote central (we're responder).
     if (!_pendingHandshakes.containsKey(deviceId)) {
       final state = NoiseHandshakeState(
@@ -178,6 +195,8 @@ class NoiseSessionManager {
     _sessions.remove(deviceId);
     _pendingHandshakes.remove(deviceId);
     _peerSigningKeys.remove(deviceId);
+    _lastHandshakeTime.remove(deviceId);
+    _handshakeAttempts.remove(deviceId);
     SecureLogger.debug('[NoiseSessionManager] Removed session for $deviceId');
   }
 
@@ -203,5 +222,7 @@ class NoiseSessionManager {
     _sessions.forEach((_, session) => session.dispose());
     _sessions.clear();
     _peerSigningKeys.clear();
+    _lastHandshakeTime.clear();
+    _handshakeAttempts.clear();
   }
 }

@@ -34,7 +34,7 @@ class FakeGroupCipher implements GroupCipher {
   }
 
   @override
-  Uint8List deriveGroupKey(String passphrase) {
+  Uint8List deriveGroupKey(String passphrase, Uint8List salt) {
     // Deterministic 32-byte key from passphrase
     final key = Uint8List(32);
     final bytes = passphrase.codeUnits;
@@ -43,6 +43,9 @@ class FakeGroupCipher implements GroupCipher {
     }
     return key;
   }
+
+  @override
+  Uint8List generateSalt() => Uint8List(16); // Fixed salt for deterministic tests
 
   @override
   String generateGroupId(String passphrase) {
@@ -134,7 +137,7 @@ void main() {
       expect(manager.isInGroup, isTrue);
       expect(manager.activeGroup, isNotNull);
       expect(group.name, equals('My Team'));
-      expect(group.key, equals(fakeCipher.deriveGroupKey('secret')));
+      expect(group.key, equals(fakeCipher.deriveGroupKey('secret', Uint8List(16))));
       expect(group.id, equals(fakeCipher.generateGroupId('secret')));
       expect(group.members, isEmpty);
     });
@@ -240,7 +243,7 @@ void main() {
 
       final loaded = await groupStorage.loadGroup();
       expect(loaded, isNotNull);
-      expect(loaded!.passphrase, equals('persist-me'));
+      expect(loaded!.groupKey, isNotEmpty);
       expect(loaded.name, equals('Saved Group'));
     });
 
@@ -258,7 +261,8 @@ void main() {
     test('initialize restores group from storage', () async {
       // Pre-populate storage as if a previous session saved it
       await groupStorage.saveGroup(
-        passphrase: 'restored-secret',
+        groupKey: fakeCipher.deriveGroupKey('restored-secret', Uint8List(16)),
+        groupId: fakeCipher.generateGroupId('restored-secret'),
         name: 'Restored Group',
         createdAt: DateTime(2025, 7, 1),
       );
@@ -272,7 +276,7 @@ void main() {
       expect(freshManager.isInGroup, isTrue);
       expect(freshManager.activeGroup!.name, equals('Restored Group'));
       expect(freshManager.activeGroup!.key,
-          equals(fakeCipher.deriveGroupKey('restored-secret')));
+          equals(fakeCipher.deriveGroupKey('restored-secret', Uint8List(16))));
       expect(freshManager.activeGroup!.id,
           equals(fakeCipher.generateGroupId('restored-secret')));
       expect(freshManager.activeGroup!.createdAt, equals(DateTime(2025, 7, 1)));

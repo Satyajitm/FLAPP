@@ -56,25 +56,36 @@ class GroupCipher {
     }
   }
 
-  /// Derive a 32-byte group key from a passphrase using Argon2id.
-  Uint8List deriveGroupKey(String passphrase) {
+  /// Generate a cryptographically random salt for use with [deriveGroupKey].
+  ///
+  /// Each group must use its own unique salt. Because the derived key (not the
+  /// passphrase) is persisted, the salt itself does not need to be stored.
+  Uint8List generateSalt() {
     final sodium = sodiumInstance;
-    final salt = sodium.crypto.genericHash(
-      message: Uint8List.fromList(utf8.encode('fluxon-group-salt:$passphrase')),
-      outLen: sodium.crypto.pwhash.saltBytes,
-    );
+    return sodium.randombytes.buf(sodium.crypto.pwhash.saltBytes);
+  }
+
+  /// Derive a 32-byte group key from [passphrase] and a random [salt] using Argon2id.
+  ///
+  /// [salt] must be [sodium.crypto.pwhash.saltBytes] bytes. Use [generateSalt]
+  /// to create a fresh random salt for each new group.
+  Uint8List deriveGroupKey(String passphrase, Uint8List salt) {
+    final sodium = sodiumInstance;
 
     // ignore: deprecated_member_use
     final key = sodium.crypto.pwhash(
       outLen: 32,
       password: passphrase.toCharArray(),
       salt: salt,
+      // Fix: opsLimitModerate (was opsLimitInteractive) for stronger brute-force resistance.
       // ignore: deprecated_member_use
-      opsLimit: sodium.crypto.pwhash.opsLimitInteractive,
+      opsLimit: sodium.crypto.pwhash.opsLimitModerate,
       // ignore: deprecated_member_use
-      memLimit: sodium.crypto.pwhash.memLimitInteractive,
+      memLimit: sodium.crypto.pwhash.memLimitModerate,
     );
-    return key.extractBytes();
+    final bytes = key.extractBytes();
+    key.dispose();
+    return bytes;
   }
 
   /// Generate a deterministic group ID from the passphrase.

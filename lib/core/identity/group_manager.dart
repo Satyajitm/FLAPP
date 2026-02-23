@@ -33,16 +33,15 @@ class GroupManager {
   /// Restore a previously saved group from secure storage.
   ///
   /// Call this once at app startup (after SodiumInit.init()).
+  /// The derived key and group ID are loaded directly — no passphrase re-derivation needed.
   Future<void> initialize() async {
     final saved = await _groupStorage.loadGroup();
     if (saved == null) return;
 
-    final groupKey = _cipher.deriveGroupKey(saved.passphrase);
-    final groupId = _cipher.generateGroupId(saved.passphrase);
     _activeGroup = FluxonGroup(
-      id: groupId,
+      id: saved.groupId,
       name: saved.name,
-      key: groupKey,
+      key: saved.groupKey,
       members: {},
       createdAt: saved.createdAt,
     );
@@ -53,7 +52,8 @@ class GroupManager {
   /// Derives a group key from the passphrase using Argon2id and generates
   /// a random group ID.
   FluxonGroup createGroup(String passphrase, {String? groupName}) {
-    final groupKey = _cipher.deriveGroupKey(passphrase);
+    final salt = _cipher.generateSalt();
+    final groupKey = _cipher.deriveGroupKey(passphrase, salt);
     final groupId = _cipher.generateGroupId(passphrase);
     final name = groupName ?? 'Fluxon Group';
     final now = DateTime.now();
@@ -66,9 +66,9 @@ class GroupManager {
       createdAt: now,
     );
 
-    // Persist — fire-and-forget to keep createGroup synchronous
+    // Persist derived key and group ID — the passphrase is NOT stored.
     unawaited(
-      _groupStorage.saveGroup(passphrase: passphrase, name: name, createdAt: now),
+      _groupStorage.saveGroup(groupKey: groupKey, groupId: groupId, name: name, createdAt: now),
     );
 
     return _activeGroup!;

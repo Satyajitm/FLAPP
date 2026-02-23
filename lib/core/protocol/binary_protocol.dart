@@ -37,14 +37,22 @@ class BinaryProtocol {
   /// empty [senderName].
   static ChatPayload decodeChatPayload(Uint8List payload) {
     final raw = utf8.decode(payload, allowMalformed: true);
-    if (raw.startsWith('{"n":')) {
-      try {
-        final map = jsonDecode(raw) as Map<String, dynamic>;
+    // Fix: Use strict key-presence checks instead of a string prefix match
+    // to prevent JSON injection via crafted payload content.
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map &&
+          decoded.containsKey('n') &&
+          decoded['n'] is String &&
+          decoded.containsKey('t') &&
+          decoded['t'] is String) {
         return ChatPayload(
-          senderName: map['n'] as String? ?? '',
-          text: map['t'] as String? ?? '',
+          senderName: decoded['n'] as String,
+          text: decoded['t'] as String,
         );
-      } catch (_) {}
+      }
+    } catch (_) {
+      // Not JSON — fall through to plain-text handling below.
     }
     return ChatPayload(senderName: '', text: raw);
   }
@@ -142,6 +150,8 @@ class BinaryProtocol {
   static DiscoveryPayload? decodeDiscoveryPayload(Uint8List data) {
     if (data.isEmpty) return null;
     final neighborCount = data[0];
+    // Fix: Reject unrealistic neighbor counts to prevent oversized allocations.
+    if (neighborCount > 10) return null;
     if (data.length < 1 + neighborCount * 32) return null;
     final neighbors = <Uint8List>[];
     for (var i = 0; i < neighborCount; i++) {

@@ -482,6 +482,7 @@ class NoiseHandshakeState {
     final keyPair = sodium.crypto.box.keyPair();
     localEphemeralPrivate = keyPair.secretKey.extractBytes();
     localEphemeralPublic = Uint8List.fromList(keyPair.publicKey);
+    keyPair.secretKey.dispose(); // Zero SecureKey after extracting bytes
   }
 
   void _performDH(Uint8List privateKey, Uint8List publicKey) {
@@ -490,6 +491,36 @@ class NoiseHandshakeState {
       n: SecureKey.fromList(sodium, privateKey),
       p: publicKey,
     );
-    _symmetricState.mixKey(sharedSecret.extractBytes());
+    final sharedBytes = sharedSecret.extractBytes();
+    _symmetricState.mixKey(sharedBytes);
+    // Zero shared secret bytes immediately after use
+    for (int i = 0; i < sharedBytes.length; i++) sharedBytes[i] = 0;
+  }
+
+  /// Zero all sensitive key material held in this handshake state.
+  ///
+  /// Call after [getTransportCiphers] or when aborting the handshake.
+  void dispose() {
+    if (localStaticPrivate != null) {
+      for (int i = 0; i < localStaticPrivate!.length; i++) localStaticPrivate![i] = 0;
+      localStaticPrivate = null;
+    }
+    if (localEphemeralPrivate != null) {
+      for (int i = 0; i < localEphemeralPrivate!.length; i++) localEphemeralPrivate![i] = 0;
+      localEphemeralPrivate = null;
+    }
+    if (localEphemeralPublic != null) {
+      for (int i = 0; i < localEphemeralPublic!.length; i++) localEphemeralPublic![i] = 0;
+      localEphemeralPublic = null;
+    }
+    if (remoteStaticPublic != null) {
+      for (int i = 0; i < remoteStaticPublic!.length; i++) remoteStaticPublic![i] = 0;
+      remoteStaticPublic = null;
+    }
+    if (remoteEphemeralPublic != null) {
+      for (int i = 0; i < remoteEphemeralPublic!.length; i++) remoteEphemeralPublic![i] = 0;
+      remoteEphemeralPublic = null;
+    }
+    _symmetricState._cipherState.clear();
   }
 }

@@ -117,9 +117,16 @@ class FluxonPacket {
     if (type == null) return null;
 
     final ttl = buffer.getUint8(offset++);
+    // Fix: Reject packets with TTL exceeding the protocol maximum.
+    if (ttl > maxTTL) return null;
     final flags = buffer.getUint8(offset++);
     final timestamp = buffer.getInt64(offset);
     offset += 8;
+    // Fix: Reject packets whose timestamp deviates more than ±5 minutes
+    // from local clock to guard against replay and clock-skew attacks.
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final diff = (timestamp - now).abs();
+    if (diff > 5 * 60 * 1000) return null;
 
     final sourceId = Uint8List.fromList(Uint8List.sublistView(data, offset, offset + 32));
     offset += 32;
@@ -128,6 +135,9 @@ class FluxonPacket {
 
     final payloadLen = buffer.getUint16(offset);
     offset += 2;
+    // Fix: Reject packets claiming a payload larger than the protocol
+    // maximum before allocating any buffer memory.
+    if (payloadLen > maxPayloadSize) return null;
 
     if (data.length < offset + payloadLen + (hasSignature ? signatureSize : 0)) {
       return null;

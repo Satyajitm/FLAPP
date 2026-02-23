@@ -22,10 +22,18 @@ class _CreateGroupScreenState extends ConsumerState<CreateGroupScreen> {
     super.dispose();
   }
 
+  String? _passphraseError;
+
   void _createGroup() {
     final name = _nameController.text.trim();
     final passphrase = _passphraseController.text.trim();
     if (passphrase.isEmpty) return;
+
+    if (passphrase.length < 8) {
+      setState(() => _passphraseError = 'Passphrase must be at least 8 characters');
+      return;
+    }
+    setState(() => _passphraseError = null);
 
     final group = ref.read(groupManagerProvider).createGroup(
       passphrase,
@@ -109,6 +117,7 @@ class _CreateGroupScreenState extends ConsumerState<CreateGroupScreen> {
               obscureText: _obscurePassphrase,
               decoration: InputDecoration(
                 labelText: 'Passphrase',
+                errorText: _passphraseError,
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),

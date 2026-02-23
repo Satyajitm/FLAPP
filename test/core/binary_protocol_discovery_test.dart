@@ -107,25 +107,33 @@ void main() {
       expect(decoded.neighbors[0], equals(makePeerId(0xAA)));
     });
 
-    test('round-trip with maximum representable neighbors (255)', () {
-      final neighbors = List.generate(255, (i) => makePeerId(i & 0xFF));
+    test('round-trip with maximum allowed neighbors (10)', () {
+      final neighbors = List.generate(10, (i) => makePeerId(i & 0xFF));
       final encoded =
           BinaryProtocol.encodeDiscoveryPayload(neighbors: neighbors);
       final decoded = BinaryProtocol.decodeDiscoveryPayload(encoded);
 
       expect(decoded, isNotNull);
-      expect(decoded!.neighbors, hasLength(255));
-      // Check first and last
+      expect(decoded!.neighbors, hasLength(10));
       expect(decoded.neighbors[0], equals(makePeerId(0)));
-      expect(decoded.neighbors[254], equals(makePeerId(254)));
+      expect(decoded.neighbors[9], equals(makePeerId(9)));
     });
 
-    test('encoded buffer size for max neighbors', () {
+    test('decodeDiscoveryPayload rejects unrealistic neighbor counts (>10)', () {
+      // Craft a payload claiming 255 neighbors — security fix rejects this
       final neighbors = List.generate(255, (i) => makePeerId(i & 0xFF));
       final encoded =
           BinaryProtocol.encodeDiscoveryPayload(neighbors: neighbors);
-      // 1 byte count + 255 * 32 bytes
-      expect(encoded.length, equals(1 + 255 * 32));
+      final decoded = BinaryProtocol.decodeDiscoveryPayload(encoded);
+      expect(decoded, isNull);
+    });
+
+    test('encoded buffer size for max allowed neighbors (10)', () {
+      final neighbors = List.generate(10, (i) => makePeerId(i & 0xFF));
+      final encoded =
+          BinaryProtocol.encodeDiscoveryPayload(neighbors: neighbors);
+      // 1 byte count + 10 * 32 bytes
+      expect(encoded.length, equals(1 + 10 * 32));
     });
   });
 }
