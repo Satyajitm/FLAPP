@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/providers/group_providers.dart';
+import 'share_group_screen.dart';
 
 /// Create group screen.
 class CreateGroupScreen extends ConsumerStatefulWidget {
@@ -40,7 +41,13 @@ class _CreateGroupScreenState extends ConsumerState<CreateGroupScreen> {
       groupName: name.isEmpty ? null : name,
     );
     ref.read(activeGroupProvider.notifier).state = group;
-    Navigator.of(context).pop();
+
+    // Navigate to the share screen so the creator can share the join code.
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ShareGroupScreen(group: group, passphrase: passphrase),
+      ),
+    );
   }
 
   @override
@@ -89,7 +96,7 @@ class _CreateGroupScreenState extends ConsumerState<CreateGroupScreen> {
             ),
             const SizedBox(height: 8),
             Text(
-              'Share the passphrase with your group members so they can join.',
+              'You\'ll get a join code to share with your group members.',
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize: 14,

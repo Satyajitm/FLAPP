@@ -76,11 +76,51 @@ class _FakeGroupCipher implements GroupCipher {
   }
 
   @override
-  String generateGroupId(String passphrase) =>
+  String generateGroupId(String passphrase, Uint8List salt) =>
       'fake-group-${passphrase.hashCode.toRadixString(16)}';
 
   @override
   Uint8List generateSalt() => Uint8List(16); // Fixed salt for deterministic tests
+
+  static const _b32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+
+  @override
+  String encodeSalt(Uint8List salt) {
+    var buffer = 0;
+    var bitsLeft = 0;
+    final result = StringBuffer();
+    for (final byte in salt) {
+      buffer = (buffer << 8) | byte;
+      bitsLeft += 8;
+      while (bitsLeft >= 5) {
+        bitsLeft -= 5;
+        result.writeCharCode(_b32.codeUnitAt((buffer >> bitsLeft) & 0x1F));
+      }
+    }
+    if (bitsLeft > 0) {
+      result.writeCharCode(_b32.codeUnitAt((buffer << (5 - bitsLeft)) & 0x1F));
+    }
+    return result.toString();
+  }
+
+  @override
+  Uint8List decodeSalt(String code) {
+    final upper = code.toUpperCase();
+    var buffer = 0;
+    var bitsLeft = 0;
+    final result = <int>[];
+    for (final ch in upper.split('')) {
+      final val = _b32.indexOf(ch);
+      if (val < 0) throw FormatException('Invalid base32 char: $ch');
+      buffer = (buffer << 5) | val;
+      bitsLeft += 5;
+      if (bitsLeft >= 8) {
+        bitsLeft -= 8;
+        result.add((buffer >> bitsLeft) & 0xFF);
+      }
+    }
+    return Uint8List.fromList(result);
+  }
 }
 
 class _FakeSecureStorage implements FlutterSecureStorage {

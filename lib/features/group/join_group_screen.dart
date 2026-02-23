@@ -1,8 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 import '../../core/providers/group_providers.dart';
 
-/// Join group via passphrase screen.
+/// Join group via passphrase + join code screen.
+///
+/// The joiner must supply both the group passphrase (shared verbally or via
+/// another channel) AND the 26-character join code (typed or scanned from the
+/// creator's QR code). Together they reproduce the exact same key as the creator.
 class JoinGroupScreen extends ConsumerStatefulWidget {
   const JoinGroupScreen({super.key});
 
@@ -12,31 +17,131 @@ class JoinGroupScreen extends ConsumerStatefulWidget {
 
 class _JoinGroupScreenState extends ConsumerState<JoinGroupScreen> {
   final _passphraseController = TextEditingController();
+  final _joinCodeController = TextEditingController();
   bool _obscurePassphrase = true;
   bool _isJoining = false;
+
+  String? _passphraseError;
+  String? _joinCodeError;
 
   @override
   void dispose() {
     _passphraseController.dispose();
+    _joinCodeController.dispose();
     super.dispose();
   }
 
-  String? _passphraseError;
+  static const _validCodeChars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+
+  bool _isValidCode(String code) {
+    if (code.length != 26) return false;
+    return code.split('').every((c) => _validCodeChars.contains(c));
+  }
 
   void _joinGroup() {
     final passphrase = _passphraseController.text.trim();
-    if (passphrase.isEmpty) return;
+    final joinCode = _joinCodeController.text.trim().toUpperCase();
 
-    if (passphrase.length < 8) {
+    var hasError = false;
+
+    if (passphrase.isEmpty) {
+      setState(() => _passphraseError = 'Enter the group passphrase');
+      hasError = true;
+    } else if (passphrase.length < 8) {
       setState(() => _passphraseError = 'Passphrase must be at least 8 characters');
-      return;
+      hasError = true;
+    } else {
+      setState(() => _passphraseError = null);
     }
-    setState(() => _passphraseError = null);
+
+    if (joinCode.isEmpty) {
+      setState(() => _joinCodeError = 'Enter the 26-character join code');
+      hasError = true;
+    } else if (!_isValidCode(joinCode)) {
+      setState(() => _joinCodeError = 'Invalid code — must be 26 characters (A-Z, 2-7)');
+      hasError = true;
+    } else {
+      setState(() => _joinCodeError = null);
+    }
+
+    if (hasError) return;
 
     setState(() => _isJoining = true);
-    final group = ref.read(groupManagerProvider).joinGroup(passphrase);
-    ref.read(activeGroupProvider.notifier).state = group;
-    Navigator.of(context).pop();
+    try {
+      final group = ref.read(groupManagerProvider).joinGroup(
+        passphrase,
+        joinCode: joinCode,
+      );
+      ref.read(activeGroupProvider.notifier).state = group;
+      Navigator.of(context).pop();
+    } catch (e) {
+      setState(() {
+        _isJoining = false;
+        _joinCodeError = 'Invalid join code';
+      });
+    }
+  }
+
+  /// Open the camera to scan a QR code.
+  ///
+  /// Expects payload `fluxon:<joinCode>:<passphrase>`. On success, fills both
+  /// text fields and returns.
+  Future<void> _scanQr() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.black,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SizedBox(
+        height: MediaQuery.of(context).size.height * 0.65,
+        child: Stack(
+          children: [
+            MobileScanner(
+              onDetect: (capture) {
+                final barcode = capture.barcodes.firstOrNull;
+                final raw = barcode?.rawValue;
+                if (raw == null) return;
+                _parseQrPayload(raw);
+                Navigator.of(ctx).pop();
+              },
+            ),
+            Positioned(
+              top: 16,
+              right: 16,
+              child: IconButton(
+                icon: const Icon(Icons.close, color: Colors.white, size: 28),
+                onPressed: () => Navigator.of(ctx).pop(),
+              ),
+            ),
+            Center(
+              child: Container(
+                width: 240,
+                height: 240,
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.white, width: 2),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _parseQrPayload(String raw) {
+    // Expected format: fluxon:<joinCode>:<passphrase>
+    if (!raw.startsWith('fluxon:')) return;
+    final parts = raw.substring('fluxon:'.length).split(':');
+    if (parts.length < 2) return;
+    final joinCode = parts[0];
+    final passphrase = parts.sublist(1).join(':'); // passphrase may contain colons
+    setState(() {
+      _joinCodeController.text = joinCode;
+      _passphraseController.text = passphrase;
+    });
   }
 
   @override
@@ -85,7 +190,7 @@ class _JoinGroupScreenState extends ConsumerState<JoinGroupScreen> {
             ),
             const SizedBox(height: 8),
             Text(
-              'Enter the passphrase shared by your group creator.',
+              'Enter the passphrase and join code from the group creator.',
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize: 14,
@@ -94,6 +199,8 @@ class _JoinGroupScreenState extends ConsumerState<JoinGroupScreen> {
               ),
             ),
             const SizedBox(height: 36),
+
+            // Passphrase field
             TextField(
               controller: _passphraseController,
               obscureText: _obscurePassphrase,
@@ -116,7 +223,39 @@ class _JoinGroupScreenState extends ConsumerState<JoinGroupScreen> {
                 ),
               ),
             ),
+            const SizedBox(height: 16),
+
+            // Join code field
+            TextField(
+              controller: _joinCodeController,
+              textCapitalization: TextCapitalization.characters,
+              decoration: InputDecoration(
+                labelText: 'Join Code',
+                hintText: 'e.g. ABCDE2FGHIJ3KLMNO4PQRST5UV',
+                errorText: _joinCodeError,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                prefixIcon: const Icon(Icons.vpn_key_outlined),
+                helperText: '26-character code shown by the group creator',
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // Scan QR button
+            OutlinedButton.icon(
+              onPressed: _scanQr,
+              icon: const Icon(Icons.qr_code_scanner_outlined),
+              label: const Text('Scan QR'),
+              style: OutlinedButton.styleFrom(
+                minimumSize: const Size.fromHeight(48),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+            ),
             const SizedBox(height: 32),
+
             FilledButton(
               onPressed: _isJoining ? null : _joinGroup,
               style: FilledButton.styleFrom(

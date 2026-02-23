@@ -5,6 +5,151 @@ Each entry records **what** changed, **which files** were affected, and **why** 
 
 ---
 
+## [v2.9] — Group ID Collision Fix + Comprehensive Test Coverage
+**Date:** 2026-02-23
+**Branch:** `Major_Security_Fixes`
+**Status:** Complete — APK built successfully (`app-release.apk`, 67.5 MB) · 559/559 tests passing
+
+### Summary
+Resolved Group ID collision vulnerabilities introduced in v2.6 where all groups using the same passphrase derived identical IDs and keys. Fixed by threading the per-group random salt through the full derivation pipeline (`generateGroupId`, `encodeSalt`, `decodeSalt`). Added a new `ShareGroupScreen` for displaying join codes after group creation. Added 29 new tests across 3 files covering all newly-added code paths brought to zero open failures.
+
+---
+
+### Changes
+
+#### 1. `FakeGroupCipher` — All Test Files Updated
+
+**Files affected:**
+- `test/core/services/receipt_service_test.dart`
+- `test/features/chat_repository_test.dart`
+- `test/features/emergency_repository_test.dart`
+- `test/features/receipt_integration_test.dart`
+- `test/core/group_manager_test.dart`
+- `test/features/group_screens_test.dart`
+
+**What changed:**
+- `generateGroupId(passphrase, salt)` signature updated to accept the `salt` parameter in all `FakeGroupCipher` implementations
+- Correctly implemented RFC 4648 base32 `encodeSalt` / `decodeSalt` logic (26-char, A-Z + 2-7 charset) in each fake — replacing broken hex-based stubs that produced characters outside the valid set
+- Removed spurious `@override` annotations before `static const _b32` in three files
+
+**Why:**
+The new `GroupCipher` interface added a `salt` parameter to `generateGroupId` and new `encodeSalt`/`decodeSalt` methods. Every test double had to be updated to match. The broken hex-based fake implementations caused `JoinGroupScreen` tests to fail because the generated codes failed the screen's base32 regex validation.
+
+---
+
+#### 2. Syntax Fix — `test/features/group_screens_test.dart`
+
+**What changed:**
+- Removed invalid `String get validJoinCode` member declaration inside a `group()` callback (Dart does not allow getters inside closures)
+- Replaced with a local variable `final validJoinCode = ...` inside the relevant test body
+
+**Why:**
+The invalid Dart syntax caused a compile error that blocked the entire test file from running.
+
+---
+
+#### 3. New Test File — `test/features/share_group_screen_test.dart` *(13 tests)*
+
+**What changed:**
+Full widget test suite for the new `ShareGroupScreen`:
+
+| Test | What it verifies |
+|---|---|
+| renders heading and subtitle | Screen layout / copy |
+| displays join code prominently | `FluxonGroup.joinCode` rendered as text |
+| join code is exactly 26 characters | Length contract |
+| join code contains only valid base32 characters | A-Z + 2-7 charset |
+| displays group name | `Group: <name>` label |
+| displays Join Code label | Section header |
+| has a copy button | `Icons.copy_outlined` present |
+| copy button shows snackbar | `'Join code copied'` SnackBar |
+| has a Done button | `'Done'` FilledButton present |
+| Done button double-pops back to root | Navigator `..pop()..pop()` cascade |
+| close (X) icon double-pops back to root | Same via AppBar close icon |
+| QR data format (`fluxon:<code>:<pass>`) | `_qrData` getter formula |
+| different passphrases produce different QR data | QR uniqueness |
+
+**Why:**
+`ShareGroupScreen` was entirely new code with zero coverage. These tests validate the core UX contract: join code is always displayed correctly, copying works, and both exit paths pop back two levels.
+
+---
+
+#### 4. Expanded — `test/features/group_screens_test.dart` *(+7 tests)*
+
+**What changed:**
+Added edge-case tests for `CreateGroupScreen` and `JoinGroupScreen`:
+
+| Screen | Test | Code path covered |
+|---|---|---|
+| Create | passphrase < 8 chars shows error | `_passphraseError` setState branch |
+| Create | visibility toggle | `_obscurePassphrase` toggle |
+| Join | passphrase < 8 chars shows error | Same guard in JoinGroupScreen |
+| Join | invalid join code characters | `'Invalid code — must be 26 characters (A-Z, 2-7)'` |
+| Join | wrong-length join code | Same error for 8-char `'TOOSHORT'` |
+| Join | QR payload parser logic | `fluxon:<code>:<pass>` split with colon-containing passphrase |
+| Join | passphrase visibility toggle | `_obscurePassphrase` toggle on JoinGroupScreen |
+
+**Why:**
+The validation branches (`passphrase.length < 8`, invalid join code chars/length, QR payload split-on-colon) had no test coverage. The visibility toggle was also untested — it's pure UI state but is critical UX for passphrase entry.
+
+---
+
+#### 5. Expanded — `test/core/group_manager_test.dart` *(+9 tests)*
+
+**What changed:**
+Two new `group()` blocks added below the existing test groups:
+
+**`GroupManager — joinGroup additional coverage`** (4 tests):
+- `joinGroup` with custom `groupName` uses provided name
+- `joinGroup` with `null` groupName falls back to `'Fluxon Group'`
+- `joinGroup` sets `isInGroup` true on the joiner
+- `joinGroup` return value is `identical` to `activeGroup`
+
+**`FluxonGroup model`** (5 tests):
+- `members` set is empty after `createGroup`
+- `createdAt` is set to approximately now (±1 second)
+- `joinCode` roundtrips via `decodeSalt` back to the original salt
+- `joinCode` contains only valid base32 characters
+- Two managers with different passphrases produce different group IDs
+
+**Why:**
+The `joinGroup(groupName:)` optional parameter, default-name fallback, return-value identity, `FluxonGroup.members` initial state, `createdAt` timestamp, and joinCode/salt roundtrip were all uncovered code paths.
+
+---
+
+### Test Results
+
+| Suite | Tests Added | Passing |
+|---|---|---|
+| `group_cipher_test.dart` | — (pre-existing) | 10 |
+| `group_storage_test.dart` | — (pre-existing) | 7 |
+| `group_manager_test.dart` | +9 | 31 |
+| `group_screens_test.dart` | +7 | 16 |
+| `share_group_screen_test.dart` | +13 (new file) | 13 |
+| **All other tests** | — | 482 |
+| **Total** | **+29** | **559 / 559** |
+
+---
+
+### APK Build
+
+```
+flutter build apk
+✓ Built build\app\outputs\flutter-apk\app-release.apk (67.5 MB)
+```
+Release APK built successfully with no build or Gradle errors. Tree-shaking reduced `MaterialIcons-Regular.otf` from 1,645,184 bytes → 7,408 bytes.
+
+---
+
+### What Did NOT Change
+- All transport / BLE / mesh networking logic — **unchanged**
+- Cryptography (`noise_protocol.dart`, Argon2id key derivation) — **unchanged**
+- Wire protocol, packet format — **unchanged**
+- Chat, Location, Emergency features — **unchanged**
+- Production `GroupCipher`, `GroupManager`, `GroupStorage` implementations — **unchanged** (only test fakes updated)
+
+---
+
 ## [v2.8] — Remove Unrunnable Sodium Tests
 **Date:** 2026-02-23
 **Branch:** `Major_Security_Fixes`
