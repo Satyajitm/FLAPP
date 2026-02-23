@@ -21,6 +21,9 @@ dependencies:
   # Cryptography (libsodium bindings)
   sodium_libs: ^2.2.1
 
+  # SHA256/HMAC-SHA256 for Noise Protocol HKDF (also a transitive dep via http_cache_file_store)
+  crypto: ^3.0.0
+
   # Map display for location feature
   flutter_map: ^7.0.2
   latlong2: ^0.9.1

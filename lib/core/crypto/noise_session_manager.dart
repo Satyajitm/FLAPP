@@ -115,6 +115,9 @@ class NoiseSessionManager {
       if (state.isComplete) {
         final remotePubKey = state.remoteStaticPublic;
         if (remotePubKey != null && remoteSigningKey.isNotEmpty && remoteSigningKey.length == 32) {
+          if (remoteSigningKey.every((b) => b == 0)) {
+            throw Exception('Invalid signing key: all-zero key rejected');
+          }
           // Store remote signing key
           _peerSigningKeys[deviceId] = remoteSigningKey;
 
@@ -141,6 +144,9 @@ class NoiseSessionManager {
       if (state.isComplete) {
         final remotePubKey = state.remoteStaticPublic;
         if (remotePubKey != null && remoteSigningKey.isNotEmpty && remoteSigningKey.length == 32) {
+          if (remoteSigningKey.every((b) => b == 0)) {
+            throw Exception('Invalid signing key: all-zero key rejected');
+          }
           // Store remote signing key
           _peerSigningKeys[deviceId] = remoteSigningKey;
 

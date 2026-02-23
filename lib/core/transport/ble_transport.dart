@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:developer' as developer;
 import 'dart:typed_data';
 import 'package:ble_peripheral/ble_peripheral.dart' as ble_p;
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
@@ -109,7 +108,7 @@ class BleTransport extends Transport {
   Stream<List<PeerConnection>> get connectedPeers => _peersController.stream;
 
   void _log(String message) {
-    developer.log('[BleTransport] $message', name: 'Fluxon.BLE');
+    SecureLogger.debug(message, category: 'BLE');
   }
 
   // ---------------------------------------------------------------------------
@@ -280,6 +279,10 @@ class BleTransport extends Transport {
         // Only consider devices advertising our service UUID **or**
         // devices whose local name is "Fluxon" (fallback when Android
         // strips the service UUID from the advertisement).
+        // NOTE: The name match is used only as a discovery hint to attempt a
+        // connection. It confers NO authentication or elevated trust — actual
+        // authentication is performed via the Noise XX handshake after connection,
+        // and GATT service UUID verification happens before any data exchange.
         final hasService = result.advertisementData.serviceUuids
             .any((u) => u == serviceUuid);
         final hasName =
@@ -287,10 +290,7 @@ class BleTransport extends Transport {
             (result.advertisementData.advName.toLowerCase().contains('fluxon'));
 
         if (hasService || hasName) {
-          _log('Found Fluxon device: ${result.device.remoteId.str} '
-               '(name=${result.device.platformName}, '
-               'advName=${result.advertisementData.advName}, '
-               'rssi=${result.rssi}, hasService=$hasService)');
+          _log('Found candidate device (rssi=${result.rssi}, hasService=$hasService, hasName=$hasName)');
           _handleDiscoveredDevice(result);
         }
       }
@@ -512,6 +512,11 @@ class BleTransport extends Transport {
   Future<void> broadcastPacket(FluxonPacket packet) async {
     _lastActivityTimestamp = DateTime.now();
     final data = packet.encodeWithSignature();
+    // METADATA EXPOSURE NOTE: The encoded packet contains the source peer ID,
+    // packet type, and timestamp in plaintext (only the payload is encrypted at
+    // the group layer). Any BLE observer within range can observe packet type,
+    // timing, and frequency of transmissions. No plaintext PII is logged here;
+    // log only the byte length to avoid leaking type/timestamp to log aggregators.
     _log('Broadcasting packet, len=${data.length}');
 
     // Send via central connections (write to peers' characteristics)
@@ -555,20 +560,13 @@ class BleTransport extends Transport {
         packetData = decrypted;
         _log('Decrypted packet from $fromDeviceId');
       } else {
-        // Decryption failed — only allow valid plaintext packets through
-        // (broadcasts and handshakes are sent unencrypted even between
-        // peers with established Noise sessions).
-        final probe = FluxonPacket.decode(data, hasSignature: true) ??
-            FluxonPacket.decode(data, hasSignature: false);
-        if (probe != null) {
-          packetData = data;
-          _log('Decryption failed for $fromDeviceId, valid plaintext packet (type=${probe.type})');
-        } else {
-          // Not a valid plaintext packet either — likely corrupted or
-          // a Noise-encrypted packet that failed decryption. Drop it.
-          _log('Decryption failed for $fromDeviceId, invalid packet, dropping');
-          return;
-        }
+        // Decryption failed on an established Noise session — do NOT fall back
+        // to plaintext. Drop the packet to prevent plaintext bypass attacks.
+        SecureLogger.warning(
+          'Decryption failed on established session — dropping packet',
+          category: 'BLE',
+        );
+        return;
       }
     }
 

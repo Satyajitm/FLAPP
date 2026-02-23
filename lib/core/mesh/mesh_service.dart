@@ -194,16 +194,24 @@ class MeshService implements Transport {
           );
           return; // Drop forged packet
         }
-      } else if (packet.signature != null) {
-        // Signing key not yet available (handshake in progress or not yet started)
-        // Accept but log — cannot verify yet.
+      } else {
+        // Signing key not yet available. Only handshake and discovery packets
+        // are exempt (they distribute signing keys). All other packet types
+        // must be dropped to prevent relay of unauthenticated multi-hop packets.
+        if (packet.type != MessageType.discovery &&
+            packet.type != MessageType.topologyAnnounce) {
+          SecureLogger.warning(
+            'Dropping packet: signing key not cached for source peer and packet type is not handshake/discovery',
+            category: _cat,
+          );
+          return;
+        }
+        // Discovery/topology packets without a known key: accept provisionally.
         SecureLogger.debug(
-          'Packet signed but signing key not yet known for ${HexUtils.encode(packet.sourceId)} — accepting provisionally',
+          'Discovery/topology packet from unknown peer — accepting provisionally',
           category: _cat,
         );
       }
-      // If signingKey == null AND packet.signature == null: peer not yet known,
-      // allow through (e.g. discovery before handshake completes).
     }
 
     // Feed to gossip sync for gap-filling bookkeeping.

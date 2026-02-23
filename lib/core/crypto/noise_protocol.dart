@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:typed_data';
+import 'package:crypto/crypto.dart' as pkg_crypto;
 import 'package:sodium_libs/sodium_libs.dart';
 import 'sodium_instance.dart';
 
@@ -289,14 +290,13 @@ class NoiseSymmetricState {
     return (c1, c2);
   }
 
-  // HKDF using HMAC-SHA256
+  // HKDF-SHA256 per RFC 5869 / Noise Protocol spec.
+  // Uses HMAC-SHA256 (not crypto_auth which is HMAC-SHA512/256).
   List<Uint8List> _hkdf(Uint8List chainingKey, Uint8List inputKeyMaterial, int numOutputs) {
-    final sodium = sodiumInstance;
-    final tempKey = sodium.crypto.auth(
-      message: inputKeyMaterial,
-      key: SecureKey.fromList(sodium, chainingKey),
-    );
+    // HKDF-Extract: tempKey = HMAC-SHA256(chainingKey, inputKeyMaterial)
+    final tempKey = _hmacSha256(chainingKey, inputKeyMaterial);
 
+    // HKDF-Expand: T(1) = HMAC-SHA256(tempKey, 0x01), T(2) = HMAC-SHA256(tempKey, T(1) || 0x02), …
     final outputs = <Uint8List>[];
     var currentOutput = Uint8List(0);
 
@@ -304,14 +304,21 @@ class NoiseSymmetricState {
       final input = Uint8List(currentOutput.length + 1);
       input.setAll(0, currentOutput);
       input[input.length - 1] = i;
-      currentOutput = sodium.crypto.auth(
-        message: input,
-        key: SecureKey.fromList(sodium, tempKey),
-      );
+      currentOutput = _hmacSha256(tempKey, input);
       outputs.add(currentOutput);
     }
 
     return outputs;
+  }
+
+  /// HMAC-SHA256: keyed hash using the dart:crypto sha256 primitive.
+  ///
+  /// This produces a correct 32-byte HMAC-SHA256 output as required by
+  /// the Noise Protocol Framework spec (https://noiseprotocol.org/noise.html).
+  Uint8List _hmacSha256(Uint8List key, Uint8List message) {
+    final hmac = pkg_crypto.Hmac(pkg_crypto.sha256, key);
+    final digest = hmac.convert(message);
+    return Uint8List.fromList(digest.bytes);
   }
 
   Uint8List _sha256(Uint8List data) {
