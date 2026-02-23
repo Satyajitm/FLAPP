@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "skills": {
+    "flutter-testing": {
+      "source": "madteacher/mad-agents-skills",
+      "sourceType": "github",
+      "computedHash": "fd878a3c2073f6efbc6cedc4d02c926d1dba79307aa837b2df88c383605dad1e"
+    },
+    "senior-security": {
+      "source": "davila7/claude-code-templates",
+      "sourceType": "github",
+      "computedHash": "9489abd6ae7b28d6d7fba1a75cdcc78cb370558d9c3129cc6a0276bc1630823a"
+    }
+  }
+}
