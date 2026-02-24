@@ -251,14 +251,24 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     // Play notification sound and send read receipts when new incoming messages arrive.
     ref.listen<ChatState>(chatControllerProvider, (previous, next) {
       if (previous == null) return;
-      if (next.messages.length > previous.messages.length) {
-        final newMessages = next.messages.sublist(previous.messages.length);
-        final incoming = newMessages.where((m) => !m.isLocal).toList();
-        if (incoming.isNotEmpty) {
-          _notificationSound.play();
-          // Chat screen is open, so mark as read immediately
-          ref.read(chatControllerProvider.notifier).markMessagesAsRead(incoming);
-        }
+      final prevMessages = previous.messages;
+      final nextMessages = next.messages;
+      if (nextMessages.isEmpty) return;
+
+      // A new message arrived when the last message ID changes. Using length
+      // comparison alone misses new messages once the 200-message cap is reached
+      // because trimming the oldest keeps the list size constant.
+      final prevLastId = prevMessages.isEmpty ? null : prevMessages.last.id;
+      if (nextMessages.last.id == prevLastId) return;
+
+      // Collect every message in the new state that wasn't in the previous state.
+      final prevIds = {for (final m in prevMessages) m.id};
+      final newMessages = nextMessages.where((m) => !prevIds.contains(m.id)).toList();
+      final incoming = newMessages.where((m) => !m.isLocal).toList();
+      if (incoming.isNotEmpty) {
+        _notificationSound.play();
+        // Chat screen is open, so mark as read immediately.
+        ref.read(chatControllerProvider.notifier).markMessagesAsRead(incoming);
       }
     });
 

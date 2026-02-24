@@ -5,6 +5,146 @@ Each entry records **what** changed, **which files** were affected, and **why** 
 
 ---
 
+## [v3.3] — Bug Fixes: Batch Receipt Overflow + loadMessages Scope Leak
+**Date:** 2026-02-24
+**Branch:** `Major_Security_Fixes`
+**Status:** Complete — 627/627 tests passing · Zero compile errors
+
+### Summary
+Two bugs found during a post-v3.2 code review: a packet-layer overflow in the batch receipt encoder that would silently drop receipts on any active chat with more than 11 senders, and a scoping bug in `loadMessages` that flushed unrelated groups' pending writes as an unintended side effect.
+
+---
+
+### Changes
+
+#### 1. Batch Receipt Overflow — `lib/core/protocol/binary_protocol.dart`
+
+**What changed:**
+- `maxBatchReceiptCount` reduced from `255` → `11`
+- Updated constant comment to document the derivation: `(512 − 24 − 2) / 41 = 11`
+
+**Why:**
+Each `ReceiptPayload` encodes to 41 bytes; the batch header adds 2 bytes. With the group-cipher overhead of 24 bytes (8-byte nonce + 16-byte AEAD tag from ChaCha20-Poly1305), the budget for receipt data inside a 512-byte max-payload packet is `512 − 24 − 2 = 486` bytes → floor(486 / 41) = **11 receipts**.
+
+The previous constant of 255 produced a batch payload up to 10,457 bytes, which:
+1. Exceeds the BLE fragment size (469 bytes), making the packet un-transmittable.
+2. Would be silently rejected at the receiver's `packet.decode()` guard (`payloadLen > 512 → return null`).
+
+In practice this was only triggered when more than 11 participants sent receipts before the flush timer fired. With `maxBatchReceiptCount = 11`, overflow receipts are dropped from the current batch and sent in the next flush cycle — the same behaviour the comment already documented, but now within the physical packet limit.
+
+---
+
+#### 2. `loadMessages` Flushed All Pending Groups — `lib/core/services/message_storage_service.dart`
+
+**What changed:**
+- `loadMessages(groupId)` no longer calls `_flushPendingWrites()` (which flushed every group)
+- Instead, it extracts and writes only the pending entry for `groupId` inline:
+  ```dart
+  final messages = _pendingWrites.remove(groupId)!;
+  if (_pendingWrites.isEmpty) { _pendingSinceLastFlush = 0; _debounceTimer?.cancel(); }
+  await file.writeAsString(jsonEncode(...));
+  ```
+- The debounce timer is cancelled only when the pending map becomes empty after the targeted flush, preserving in-flight batches for other groups.
+
+**Why:**
+The previous implementation called `_flushPendingWrites()`, which iterated and wrote every group in `_pendingWrites`. If group A had an unflushed write and `loadMessages(groupB)` was called (because B also had a pending write), A's data was written to disk as a side effect — resetting A's batch counter and cancelling A's debounce timer prematurely. With the targeted flush, each group's debounce lifecycle is independent.
+
+---
+
+### Test Changes
+
+#### `test/core/protocol/receipt_codec_test.dart` — clamp test updated
+
+- Test renamed from `'list clamped at 255 — excess receipts are silently dropped'` to `'list clamped at maxBatchReceiptCount — excess receipts are silently dropped'`
+- Now generates `maxBatchReceiptCount + 10` receipts (was hardcoded 300) and asserts against `BinaryProtocol.maxBatchReceiptCount` (was hardcoded 255)
+- Added assertion: `encoded.length <= FluxonPacket.maxPayloadSize` — directly verifies the encoded batch fits inside a packet
+- Added `import 'package:fluxon_app/core/protocol/packet.dart'`
+
+---
+
+### Test Results
+
+| Suite | Status |
+|---|---|
+| `receipt_codec_test.dart` | 15/15 passing |
+| `message_storage_service_test.dart` | 24/24 passing |
+| **Grand total** | **627/627** |
+
+---
+
+### What Did NOT Change
+- Wire protocol, BLE transport, mesh relay — **unchanged**
+- All prior fixes (v3.0–v3.2) — **preserved**
+- Receipt service flush behaviour, timer logic — **unchanged** (only the per-group isolation in loadMessages changed)
+
+---
+
+## [v3.2] — Bug Fixes: Notification Listener + Cache Key Security
+**Date:** 2026-02-24
+**Branch:** `Major_Security_Fixes`
+**Status:** Complete — 627/627 tests passing · Zero compile errors
+
+### Summary
+Two bugs introduced by earlier sessions fixed: a silent regression that stopped notification sounds and read receipts from firing once the 200-message cap was reached, and a security hygiene issue where the derivation cache key held the plaintext group passphrase in a heap-allocated string.
+
+---
+
+### Changes
+
+#### 1. Notification Listener Broken at Message-Cap Boundary — `lib/features/chat/chat_screen.dart`
+
+**What changed:**
+- Replaced the `next.messages.length > previous.messages.length` length-comparison guard with a **last-message-ID check** (`nextMessages.last.id != prevLastId`)
+- New messages are identified via a set-difference: `prevIds = {for (final m in prevMessages) m.id}` then `nextMessages.where((m) => !prevIds.contains(m.id))`
+
+**Why:**
+The 200-message cap (introduced in v3.0) trims the oldest message when a new one arrives, keeping the list size constant at capacity. The old guard (`next.length > previous.length`) therefore evaluated to `200 > 200 = false` on every message after the 200th — silently suppressing the notification chime and preventing read receipts from being sent for the rest of the session. The ID-based approach is correct regardless of list size.
+
+---
+
+#### 2. Plaintext Passphrase Retained in Derivation Cache Key — `lib/core/identity/group_cipher.dart`
+
+**What changed:**
+- The `_derive()` cache key changed from `"$passphrase:${encodeSalt(salt)}"` (a heap string containing the plaintext passphrase) to a **BLAKE2b-16 hash** of `(utf8(passphrase) || salt)`, hex-encoded
+- `sodium.crypto.genericHash(message: keyInput, outLen: 16)` runs before the cache lookup; the result is hex-encoded to a 32-char string used as the map key
+
+**Why:**
+The v2.6 security hardening zeroed ephemeral key material and avoided persisting passphrases to disk. Storing the passphrase as a `Map` key string contradicted that intent — a heap dump would expose the passphrase as a live string. The BLAKE2b hash is a one-way transform; the cache still performs its function (avoiding duplicate Argon2id runs) without retaining any passphrase material. The pre-image security of BLAKE2b-16 is sufficient for a local in-process cache key.
+
+---
+
+### Test Changes
+
+#### `test/core/group_cipher_test.dart` — derivation cache group updated
+
+**What changed:**
+- Rewrote the 4 tests in `GroupCipher — derivation cache` to accurately reflect the new BLAKE2b cache key implementation
+- Tests no longer reference the old `"$passphrase:${encodeSalt(salt)}"` format
+- New descriptions test the observable properties that remain meaningful without sodium:
+  1. Two GroupCipher instances have independent caches (not static/shared)
+  2. `encodeSalt` is deterministic (same salt → same encoded string)
+  3. Different salts produce different `encodeSalt` outputs (no collision for BLAKE2b input)
+  4. `encodeSalt` is instance-independent (regression guard for future changes)
+
+---
+
+### Test Results
+
+| Suite | Status |
+|---|---|
+| `group_cipher_test.dart` | 13/13 passing |
+| `chat_controller_test.dart` | 39/39 passing |
+| **Grand total** | **627/627** |
+
+---
+
+### What Did NOT Change
+- Wire protocol, BLE transport, mesh relay — **unchanged**
+- All v3.0/v3.1 fixes — **preserved**
+- Group encryption algorithms — **unchanged** (only cache key derivation changed)
+
+---
+
 ## [v3.1] — Robustness & Quality Hardening
 **Date:** 2026-02-24
 **Branch:** `Major_Security_Fixes`
@@ -193,7 +333,32 @@ The 50% retention threshold meant compaction ran roughly twice as frequently. At
 | `chat_repository_test.dart` / `receipt_integration_test.dart` | +3 updated | — |
 | **Grand total** | **+40** | **627 / 627** |
 
----
+
+## Found and fixed in this review
+
+#: 1
+Bug: _lastBroadcastLocation not reset on stopBroadcasting — after a
+  stop/restart cycle, if the user hadn't moved > 5m, the first broadcast was
+  silently skipped. Peers who joined after the stop would never receive the 
+  user's location until physical movement occurred.
+  (location_controller.dart:88)
+Severity: Functional
+Fix: Added _lastBroadcastLocation = null in stopBroadcasting(). Updated     
+  conflicting test to assert the now-correct behaviour (restart always      
+  broadcasts).
+────────────────────────────────────────
+#: 2
+Bug: Stale comment // safe: count is clamped to 0..255 in
+  encodeBatchReceiptPayload — the actual clamp is 0..11 since v3.3
+  (binary_protocol.dart:215)
+Severity: Comment
+Fix: Updated comment to say 0..maxBatchReceiptCount (11)
+
+No other bugs found
+
+The rate-limit logic in NoiseSessionManager, the _PeerState LRU eviction,   
+retryAlert concurrency safety, _doSend mounted guards, loadMessages targeted
+ flush, and the chat_screen.dart ID-based listener are all correct. (See <attachments> above for file contents. You may not need to search or read the file again.)
 
 ### What Did NOT Change
 - BLE transport logic, Noise handshake, GATT server/client — **unchanged**

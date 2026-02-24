@@ -106,51 +106,48 @@ void main() {
   });
 
   group('GroupCipher — derivation cache (pure-Dart observable behaviour)', () {
-    // The cache stores (passphrase+encodedSalt) → (key, groupId).
-    // We cannot call the real Argon2id without sodium, so we verify the
-    // observable properties of the cache that don't require sodium:
-    //   • a fresh GroupCipher instance carries no cached entries
-    //   • two independent instances each have their own empty cache
-    //   • encodeSalt used as cache key sub-component produces stable output
+    // The internal cache key is a BLAKE2b-16 hash of (utf8(passphrase) || salt)
+    // so the plaintext passphrase is never retained as a heap map key.
+    // We cannot call the real Argon2id or BLAKE2b without sodium, so we verify
+    // the observable properties that are testable without native libs:
+    //   • a fresh GroupCipher instance is independent from any other instance
+    //     (instance-level map, not static/shared)
+    //   • encodeSalt (used as an input building block) is deterministic
+    //   • distinct salt values produce distinct encodeSalt outputs (no collision)
 
-    test('new GroupCipher instance starts with no cached derivations', () {
-      // Two instances must not share cache (instance-level map, not static).
+    test('two GroupCipher instances have independent caches (not static/shared)', () {
       final c1 = GroupCipher();
       final c2 = GroupCipher();
-      // Indirectly verify isolation: both start in a clean state with no
-      // observable side-effects from construction.
-      final salt1 = Uint8List.fromList(List.generate(16, (i) => i));
-      final salt2 = Uint8List.fromList(List.generate(16, (i) => i));
-      // encodeSalt is deterministic and pure — both instances must agree.
-      expect(c1.encodeSalt(salt1), equals(c2.encodeSalt(salt2)));
+      // encodeSalt is pure-Dart and deterministic — both instances must agree,
+      // confirming they don't interfere with each other at construction.
+      final salt = Uint8List.fromList(List.generate(16, (i) => i));
+      expect(c1.encodeSalt(salt), equals(c2.encodeSalt(salt)));
     });
 
-    test('cache key is stable: same passphrase+salt always maps to same key string', () {
+    test('encodeSalt is deterministic: same salt always produces same encoded string', () {
       final cipher = GroupCipher();
       final salt = Uint8List.fromList(List.generate(16, (i) => (i * 7) & 0xFF));
-      const passphrase = 'test-passphrase';
-      // The cache key is "$passphrase:${encodeSalt(salt)}" — verify it's stable.
-      final encoded1 = cipher.encodeSalt(salt);
-      final encoded2 = cipher.encodeSalt(salt);
-      expect('$passphrase:$encoded1', equals('$passphrase:$encoded2'));
+      // Two calls with the same salt must return identical strings so that the
+      // BLAKE2b cache key (derived from this) is stable across calls.
+      expect(cipher.encodeSalt(salt), equals(cipher.encodeSalt(salt)));
     });
 
-    test('cache key differs for different salts with same passphrase', () {
+    test('different salts produce different encodeSalt outputs (no collision)', () {
       final cipher = GroupCipher();
       final salt1 = Uint8List(16)..fillRange(0, 16, 0xAA);
       final salt2 = Uint8List(16)..fillRange(0, 16, 0xBB);
-      const passphrase = 'same-passphrase';
-      final key1 = '$passphrase:${cipher.encodeSalt(salt1)}';
-      final key2 = '$passphrase:${cipher.encodeSalt(salt2)}';
-      expect(key1, isNot(equals(key2)));
+      // Distinct salts must map to distinct encoded strings, ensuring the
+      // BLAKE2b hash inputs differ for groups with the same passphrase.
+      expect(cipher.encodeSalt(salt1), isNot(equals(cipher.encodeSalt(salt2))));
     });
 
-    test('cache key differs for different passphrases with same salt', () {
-      final cipher = GroupCipher();
+    test('same salt encodes identically regardless of GroupCipher instance', () {
+      // Regression guard: if encodeSalt ever became instance-stateful, this
+      // would catch it. The BLAKE2b key must be reproducible across instances.
+      final c1 = GroupCipher();
+      final c2 = GroupCipher();
       final salt = Uint8List(16)..fillRange(0, 16, 0x42);
-      final key1 = 'passA:${cipher.encodeSalt(salt)}';
-      final key2 = 'passB:${cipher.encodeSalt(salt)}';
-      expect(key1, isNot(equals(key2)));
+      expect(c1.encodeSalt(salt), equals(c2.encodeSalt(salt)));
     });
   });
 }

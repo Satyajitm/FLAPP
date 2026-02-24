@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fluxon_app/core/protocol/binary_protocol.dart';
+import 'package:fluxon_app/core/protocol/packet.dart';
 
 void main() {
   group('Receipt codec — encodeReceiptPayload / decodeReceiptPayload', () {
@@ -175,16 +176,22 @@ void main() {
       }
     });
 
-    test('list clamped at 255 — excess receipts are silently dropped', () {
+    test('list clamped at maxBatchReceiptCount — excess receipts are silently dropped', () {
+      // Send more receipts than the cap (11) to verify clamping.
+      final overLimit = BinaryProtocol.maxBatchReceiptCount + 10;
       final receipts = List.generate(
-        300,
+        overLimit,
         (i) => _makeReceipt(i & 0xFF, i * 1000, ReceiptType.read),
       );
       final encoded = BinaryProtocol.encodeBatchReceiptPayload(receipts);
-      expect(encoded[1], equals(255)); // count byte = 255, not 300
+      // count byte must equal the cap, not the input length
+      expect(encoded[1], equals(BinaryProtocol.maxBatchReceiptCount));
 
       final decoded = BinaryProtocol.decodeBatchReceiptPayload(encoded);
-      expect(decoded, hasLength(255));
+      expect(decoded, hasLength(BinaryProtocol.maxBatchReceiptCount));
+
+      // Verify the encoded payload fits within the 512-byte packet limit.
+      expect(encoded.length, lessThanOrEqualTo(FluxonPacket.maxPayloadSize));
     });
 
     test('decodeBatchReceiptPayload returns null for non-batch payload (no sentinel)', () {

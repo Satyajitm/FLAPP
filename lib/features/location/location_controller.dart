@@ -88,6 +88,9 @@ class LocationController extends StateNotifier<LocationState> {
   void stopBroadcasting() {
     _broadcastTimer?.cancel();
     _broadcastTimer = null;
+    // Reset the last-broadcast reference so the next startBroadcasting() always
+    // sends an immediate broadcast regardless of movement since the last stop.
+    _lastBroadcastLocation = null;
     state = state.copyWith(isBroadcasting: false);
   }
 

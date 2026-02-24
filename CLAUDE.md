@@ -32,7 +32,7 @@ flutter test --coverage
 
 FluxonApp is a Flutter mobile app for **off-grid, BLE mesh networking**. It enables phone-to-phone group chat, real-time location sharing, and emergency SOS alerts — all peer-to-peer without internet. Adapted from the Bitchat protocol with Fluxonlink-specific additions.
 
-**Current status:** Phase 4 complete + performance/correctness hardening (v3.1). 50 test files, 627 tests passing. Zero compile errors.
+**Current status:** Phase 4 complete + performance/correctness hardening (v3.3). 50 test files, 627 tests passing. Zero compile errors.
 
 ## Tech Stack
 

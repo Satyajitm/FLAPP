@@ -88,11 +88,16 @@ class GroupCipher {
   /// Run Argon2id once and cache both the group key and group ID for the given
   /// [passphrase]+[salt] pair. Subsequent calls with the same inputs are free.
   _DerivedGroup _derive(String passphrase, Uint8List salt) {
-    final cacheKey = '$passphrase:${encodeSalt(salt)}';
+    final sodium = sodiumInstance;
+
+    // Use a BLAKE2b hash of (passphrase || salt) as the cache key so the
+    // plaintext passphrase is never retained as a heap-allocated map key string.
+    final keyInput = Uint8List.fromList(utf8.encode(passphrase) + salt);
+    final keyHash = sodium.crypto.genericHash(message: keyInput, outLen: 16);
+    final cacheKey = keyHash.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+
     final cached = _derivationCache[cacheKey];
     if (cached != null) return cached;
-
-    final sodium = sodiumInstance;
 
     // ignore: deprecated_member_use
     final key = sodium.crypto.pwhash(

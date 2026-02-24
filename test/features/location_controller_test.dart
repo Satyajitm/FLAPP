@@ -272,7 +272,38 @@ void main() {
         expect(repository.broadcastedLocations, hasLength(2));
       });
 
-      test('myLocation state is updated even when broadcast is skipped', () async {
+      test('stopBroadcasting resets position reference — restart always broadcasts', () async {
+        // First broadcast
+        repository.fakeCurrentLocation = LocationUpdate(
+          peerId: myPeerId,
+          latitude: 37.7749,
+          longitude: -122.4194,
+          accuracy: 5.0,
+        );
+        await controller.startBroadcasting();
+        expect(repository.broadcastedLocations, hasLength(1));
+
+        // Tiny movement (< 5m) — would normally be throttled
+        const newLat = 37.77491;
+        repository.fakeCurrentLocation = LocationUpdate(
+          peerId: myPeerId,
+          latitude: newLat,
+          longitude: -122.4194,
+          accuracy: 5.0,
+        );
+
+        // stopBroadcasting clears _lastBroadcastLocation so the next start always
+        // sends immediately — peers who joined while we were stopped can find us.
+        controller.stopBroadcasting();
+        await controller.startBroadcasting();
+
+        // myLocation state is updated for the UI
+        expect(controller.state.myLocation?.latitude, closeTo(newLat, 0.000001));
+        // A second broadcast IS sent because stopBroadcasting reset the reference
+        expect(repository.broadcastedLocations, hasLength(2));
+      });
+
+      test('myLocation state is updated even when broadcast is skipped (no stop)', () async {
         // First broadcast
         repository.fakeCurrentLocation = LocationUpdate(
           peerId: myPeerId,
@@ -282,7 +313,7 @@ void main() {
         );
         await controller.startBroadcasting();
 
-        // Tiny movement — broadcast should be skipped
+        // Tiny movement — broadcast skipped because we did NOT stop
         const newLat = 37.77491; // < 2m
         repository.fakeCurrentLocation = LocationUpdate(
           peerId: myPeerId,
@@ -291,13 +322,12 @@ void main() {
           accuracy: 5.0,
         );
 
-        // Stop and restart triggers another _broadcastCurrentLocation
-        controller.stopBroadcasting();
+        // Second startBroadcasting without stopping — _lastBroadcastLocation intact
         await controller.startBroadcasting();
 
-        // myLocation state should still be updated for the UI
+        // myLocation state is still updated for the UI
         expect(controller.state.myLocation?.latitude, closeTo(newLat, 0.000001));
-        // But no new BLE packet was sent
+        // But no new BLE packet was sent (< 5m, no stop in between)
         expect(repository.broadcastedLocations, hasLength(1));
       });
     });

@@ -51,8 +51,19 @@ class MessageStorageService {
   /// Returns an empty list if the file does not exist or is malformed.
   /// Flushes any pending debounced write for this group first.
   Future<List<ChatMessage>> loadMessages(String groupId) async {
+    // Flush only the pending write for this group, not all pending groups.
     if (_pendingWrites.containsKey(groupId)) {
-      await _flushPendingWrites();
+      final messages = _pendingWrites.remove(groupId)!;
+      // Only reset the counter if the map is now empty to keep batch semantics
+      // correct for other groups that are still accumulating.
+      if (_pendingWrites.isEmpty) {
+        _pendingSinceLastFlush = 0;
+        _debounceTimer?.cancel();
+        _debounceTimer = null;
+      }
+      final file = await getFileForGroup(groupId);
+      final jsonList = messages.map((m) => m.toJson()).toList();
+      await file.writeAsString(jsonEncode(jsonList), flush: true);
     }
     try {
       final file = await getFileForGroup(groupId);

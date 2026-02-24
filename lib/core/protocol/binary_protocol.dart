@@ -195,8 +195,12 @@ class BinaryProtocol {
   /// Sentinel byte that identifies a batch receipt payload.
   static const _batchReceiptSentinel = 0xFF;
 
-  /// Maximum receipts per batch (count fits in one unsigned byte).
-  static const maxBatchReceiptCount = 255;
+  /// Maximum receipts per batch, constrained by the 512-byte packet payload cap.
+  ///
+  /// Budget: 512 (max payload) − 24 (group-cipher overhead: 8-byte nonce +
+  /// 16-byte AEAD tag) − 2 (batch header) = 486 bytes for receipt entries.
+  /// Each entry is 41 bytes → floor(486 / 41) = 11.
+  static const maxBatchReceiptCount = 11;
 
   /// Encode multiple receipts into a single payload.
   ///
@@ -208,7 +212,7 @@ class BinaryProtocol {
     final count = receipts.length.clamp(0, maxBatchReceiptCount);
     final buffer = ByteData(2 + count * 41);
     buffer.setUint8(0, _batchReceiptSentinel);
-    buffer.setUint8(1, count); // safe: count is clamped to 0..255
+    buffer.setUint8(1, count); // safe: count is clamped to 0..maxBatchReceiptCount (11)
     final bytes = buffer.buffer.asUint8List();
     for (var i = 0; i < count; i++) {
       final offset = 2 + i * 41;
