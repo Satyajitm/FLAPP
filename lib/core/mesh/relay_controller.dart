@@ -19,7 +19,7 @@ class RelayDecision {
 ///
 /// Ported from Bitchat's RelayController.
 class RelayController {
-  static final _rng = Random();
+  static final _rng = Random.secure();
 
   /// Decide whether to relay a packet and with what parameters.
   ///

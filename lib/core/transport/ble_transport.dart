@@ -7,6 +7,7 @@ import '../../shared/hex_utils.dart';
 import '../../shared/logger.dart';
 import '../crypto/keys.dart';
 import '../crypto/noise_session_manager.dart';
+import '../crypto/signatures.dart';
 import '../identity/identity_manager.dart';
 import '../mesh/deduplicator.dart';
 import '../protocol/binary_protocol.dart';
@@ -55,6 +56,17 @@ class BleTransport extends Transport {
   /// Negotiated MTU per BLE device ID. Defaults to 23 (BLE minimum) when
   /// negotiation fails. Used to warn when packets may exceed the link MTU.
   final Map<String, int> _deviceMtu = {};
+
+  /// Per-device last-packet timestamps for rate limiting (H3).
+  /// Limits incoming BLE notifications to [_minPacketIntervalMs] ms per device.
+  final Map<String, DateTime> _lastPacketTime = {};
+
+  /// Minimum interval between packets from the same device (20 packets/sec max).
+  static const int _minPacketIntervalMs = 50;
+
+  /// Tracks devices that have connected to us in our peripheral (GATT server) role.
+  /// Used to enforce [config.maxConnections] on peripheral-side (M4).
+  final Set<String> _peripheralClients = {};
 
   bool _running = false;
   StreamSubscription? _scanSubscription;
@@ -171,6 +183,8 @@ class BleTransport extends Transport {
     _deviceToPeerHex.clear();
     _peerHexToDevice.clear();
     _deviceMtu.clear();
+    _lastPacketTime.clear();
+    _peripheralClients.clear();
     _noiseSessionManager.clear();
     _emitPeerUpdate();
   }
@@ -206,6 +220,12 @@ class BleTransport extends Transport {
 
       ble_p.BlePeripheral.setWriteRequestCallback(
         (deviceId, characteristicId, offset, value) {
+          // M4: Enforce peripheral-side connection limit.
+          _peripheralClients.add(deviceId);
+          if (_peripheralClients.length > config.maxConnections) {
+            _log('Peripheral connection limit reached — ignoring write from $deviceId');
+            return null;
+          }
           _log('Received write from $deviceId, char=$characteristicId, len=${value?.length}');
           if (value != null) {
             _handleIncomingData(Uint8List.fromList(value), fromDeviceId: deviceId);
@@ -237,9 +257,10 @@ class BleTransport extends Transport {
       );
       _log('GATT service added: $serviceUuidStr');
 
+      // H1: Do not broadcast a localName — advertising only the service UUID
+      // prevents passive tracking of Fluxon users by app name.
       await ble_p.BlePeripheral.startAdvertising(
         services: [serviceUuidStr],
-        localName: 'Fluxon',
       );
       _log('SUCCESS: Advertising started with UUID $serviceUuidStr');
 
@@ -405,8 +426,12 @@ class BleTransport extends Transport {
           _log('WARNING: MTU $mtu < 256 for $deviceId — large packets may be silently truncated');
         }
       } catch (e) {
-        _deviceMtu[deviceId] = 23; // BLE minimum
-        _log('MTU negotiation failed for $deviceId (defaulting to 23 bytes): $e');
+        // L1: MTU negotiation failed — 23 bytes is too small for any Fluxon
+        // packet (min 142 bytes). Disconnect rather than silently truncate.
+        _log('ERROR: MTU negotiation failed for $deviceId — disconnecting: $e');
+        _connectingDevices.remove(deviceId);
+        await result.device.disconnect();
+        return;
       }
 
       _log('Discovering services on $deviceId...');
@@ -510,7 +535,10 @@ class BleTransport extends Transport {
         }
       }
 
-      await char.write(encodedData, withoutResponse: true);
+      // H6: Use write-with-response for reliability-critical packet types.
+      final isReliable = packet.type == MessageType.handshake ||
+          packet.type == MessageType.emergencyAlert;
+      await char.write(encodedData, withoutResponse: !isReliable);
       _log('Packet sent to $peerHex');
       return true;
     } catch (e) {
@@ -530,10 +558,17 @@ class BleTransport extends Transport {
     // log only the byte length to avoid leaking type/timestamp to log aggregators.
     _log('Broadcasting packet, len=${data.length}');
 
-    // Send via central connections (write to peers' characteristics)
+    // Send via central connections (write to peers' characteristics).
+    // C2: Encrypt through the per-peer Noise session where available so that
+    // packet headers are not observable by passive BLE sniffers.
     for (final entry in _peerCharacteristics.entries) {
       try {
-        await entry.value.write(data, withoutResponse: true);
+        var sendData = data;
+        if (_noiseSessionManager.hasSession(entry.key)) {
+          final encrypted = _noiseSessionManager.encrypt(data, entry.key);
+          if (encrypted != null) sendData = encrypted;
+        }
+        await entry.value.write(sendData, withoutResponse: true);
         _log('Sent to ${entry.key}');
       } catch (e) {
         _log('Failed to send to ${entry.key}: $e');
@@ -560,7 +595,23 @@ class BleTransport extends Transport {
     Uint8List data, {
     required String fromDeviceId,
   }) async {
-    _lastActivityTimestamp = DateTime.now();
+    // H7: Reject data outside valid size range before any processing.
+    if (data.isEmpty || data.length > 4096) {
+      _log('Invalid data length ${data.length} from $fromDeviceId — dropping');
+      return;
+    }
+
+    // H3: Per-device rate limiting (max 20 packets/sec).
+    final now = DateTime.now();
+    final lastTime = _lastPacketTime[fromDeviceId];
+    if (lastTime != null &&
+        now.difference(lastTime).inMilliseconds < _minPacketIntervalMs) {
+      _log('Rate limiting $fromDeviceId — dropping packet');
+      return;
+    }
+    _lastPacketTime[fromDeviceId] = now;
+
+    _lastActivityTimestamp = now;
     _log('Handling incoming data from $fromDeviceId, len=${data.length}');
 
     // Try Noise decryption first if a session is established
@@ -581,18 +632,46 @@ class BleTransport extends Transport {
       }
     }
 
-    // Try decoding with signature first, then without
+    // Try decoding with signature first; fall back only if no session exists.
     var packet = FluxonPacket.decode(packetData, hasSignature: true);
-    packet ??= FluxonPacket.decode(packetData, hasSignature: false);
+
+    // C4: Reject unsigned packets from peers that have completed a Noise handshake.
+    if (packet == null) {
+      if (_noiseSessionManager.hasSession(fromDeviceId)) {
+        SecureLogger.warning(
+          'Unsigned packet from authenticated peer $fromDeviceId — rejecting',
+          category: 'BLE',
+        );
+        return;
+      }
+      packet = FluxonPacket.decode(packetData, hasSignature: false);
+    }
+
     if (packet == null) {
       _log('Failed to decode packet from $fromDeviceId');
       return;
     }
 
-    // Handle Noise handshake packets specially
+    // Handle Noise handshake packets specially (before signature verification,
+    // since we don't yet have the remote signing key at handshake time).
     if (packet.type == MessageType.handshake) {
       await _handleHandshakePacket(fromDeviceId, packet);
       return; // Don't emit handshake packets to app layer
+    }
+
+    // C3: Verify Ed25519 signature on non-handshake packets.
+    if (packet.signature != null) {
+      final peerSigningKey = _noiseSessionManager.getSigningPublicKey(fromDeviceId);
+      if (peerSigningKey != null) {
+        final unsigned = packet.encode(); // payload without signature
+        if (!Signatures.verify(unsigned, packet.signature!, peerSigningKey)) {
+          SecureLogger.warning(
+            'Signature verification FAILED from $fromDeviceId — dropping packet',
+            category: 'BLE',
+          );
+          return;
+        }
+      }
     }
 
     // Check for duplicates
@@ -631,7 +710,8 @@ class BleTransport extends Transport {
       final char = _peerCharacteristics[fromDeviceId];
       if (char != null) {
         try {
-          await char.write(responseData, withoutResponse: true);
+          // H6: Handshakes are reliability-critical — use write-with-response.
+          await char.write(responseData, withoutResponse: false);
           _log('Sent handshake response to $fromDeviceId');
         } catch (e) {
           _log('ERROR: Failed to send handshake response: $e');
@@ -681,7 +761,8 @@ class BleTransport extends Transport {
       }
 
       final data = handshakePacket.encodeWithSignature();
-      await char.write(data, withoutResponse: true);
+      // H6: Handshakes are reliability-critical — use write-with-response.
+      await char.write(data, withoutResponse: false);
       _log('Initiated Noise handshake with $deviceId (message 1 sent)');
     } catch (e) {
       _log('ERROR: Failed to initiate Noise handshake with $deviceId: $e');

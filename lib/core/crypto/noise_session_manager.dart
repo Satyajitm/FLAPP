@@ -208,21 +208,48 @@ class NoiseSessionManager {
   /// Encrypt plaintext using the established session for a given device.
   ///
   /// Returns null if no session exists for this device (packet should not be sent).
+  /// C6: Checks [NoiseSession.shouldRekey] and tears down the session if re-keying is needed.
   Uint8List? encrypt(Uint8List plaintext, String deviceId) {
-    final session = _peers[deviceId]?.session;
+    final peer = _peers[deviceId];
+    final session = peer?.session;
     if (session == null) return null;
+
+    // C6: Tear down sessions that have exceeded the re-key threshold so the
+    // caller will re-initiate a fresh Noise XX handshake.
+    if (session.shouldRekey) {
+      SecureLogger.warning(
+        '[NoiseSessionManager] Session for $deviceId needs re-key — tearing down',
+      );
+      session.dispose();
+      peer!.session = null;
+      return null;
+    }
+
     return session.encrypt(plaintext);
   }
 
   /// Decrypt ciphertext using the established session for a given device.
   ///
   /// Returns null if no session exists or decryption fails (packet should be dropped).
+  /// C6: Checks [NoiseSession.shouldRekey] after decryption.
   Uint8List? decrypt(Uint8List ciphertext, String deviceId) {
-    final session = _peers[deviceId]?.session;
+    final peer = _peers[deviceId];
+    final session = peer?.session;
     if (session == null) return null;
 
     try {
-      return session.decrypt(ciphertext);
+      final plaintext = session.decrypt(ciphertext);
+
+      // C6: Tear down sessions that have exceeded the re-key threshold.
+      if (session.shouldRekey) {
+        SecureLogger.warning(
+          '[NoiseSessionManager] Session for $deviceId needs re-key — tearing down',
+        );
+        session.dispose();
+        peer!.session = null;
+      }
+
+      return plaintext;
     } catch (e) {
       SecureLogger.warning('[NoiseSessionManager] Decryption failed for $deviceId: $e');
       return null;

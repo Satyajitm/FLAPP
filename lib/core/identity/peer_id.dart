@@ -11,7 +11,21 @@ class PeerId {
   PeerId(this.bytes) : assert(bytes.length == 32);
 
   /// Create a PeerId from a hex string.
-  factory PeerId.fromHex(String hex) => PeerId(HexUtils.decode(hex));
+  ///
+  /// Throws [FormatException] if [hex] is not valid hex or not 32 bytes.
+  factory PeerId.fromHex(String hex) {
+    try {
+      final bytes = HexUtils.decode(hex);
+      if (bytes.length != 32) {
+        throw FormatException('PeerId must be 32 bytes, got ${bytes.length}');
+      }
+      return PeerId(bytes);
+    } on FormatException {
+      rethrow;
+    } catch (e) {
+      throw FormatException('Invalid hex peer ID: $e');
+    }
+  }
 
   /// Hex-encoded peer ID string.
   String get hex => HexUtils.encode(bytes);

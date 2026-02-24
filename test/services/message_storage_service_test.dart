@@ -17,6 +17,14 @@ class TestableStorageService extends MessageStorageService {
 
   @override
   Future<String> getDirectoryPath() async => tempDir.path;
+
+  // Bypass sodium encryption in host-side unit tests (sodium native binaries
+  // are only available on device integration tests).
+  @override
+  Future<Uint8List> encryptData(Uint8List data) async => data;
+
+  @override
+  Future<Uint8List?> decryptData(Uint8List data) async => data;
 }
 
 PeerId _makePeerId(int fillByte) =>
