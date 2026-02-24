@@ -12,6 +12,13 @@ enum EmergencyAlertType {
 
   const EmergencyAlertType(this.value);
   final int value;
+
+  /// O(1) lookup map built once at class load time.
+  static final Map<int, EmergencyAlertType> _byValue = {
+    for (final t in EmergencyAlertType.values) t.value: t,
+  };
+
+  static EmergencyAlertType? fromValue(int value) => _byValue[value];
 }
 
 /// Emergency alert state.

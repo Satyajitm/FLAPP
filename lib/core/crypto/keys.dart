@@ -54,14 +54,16 @@ class KeyStorage {
     required Uint8List privateKey,
     required Uint8List publicKey,
   }) async {
-    await _storage.write(
-      key: _staticPrivateKeyTag,
-      value: KeyGenerator.bytesToHex(privateKey),
-    );
-    await _storage.write(
-      key: _staticPublicKeyTag,
-      value: KeyGenerator.bytesToHex(publicKey),
-    );
+    await Future.wait([
+      _storage.write(
+        key: _staticPrivateKeyTag,
+        value: KeyGenerator.bytesToHex(privateKey),
+      ),
+      _storage.write(
+        key: _staticPublicKeyTag,
+        value: KeyGenerator.bytesToHex(publicKey),
+      ),
+    ]);
   }
 
   /// Load the static key pair from secure storage.
@@ -106,14 +108,16 @@ class KeyStorage {
     required Uint8List privateKey,
     required Uint8List publicKey,
   }) async {
-    await _storage.write(
-      key: _signingPrivateKeyTag,
-      value: KeyGenerator.bytesToHex(privateKey),
-    );
-    await _storage.write(
-      key: _signingPublicKeyTag,
-      value: KeyGenerator.bytesToHex(publicKey),
-    );
+    await Future.wait([
+      _storage.write(
+        key: _signingPrivateKeyTag,
+        value: KeyGenerator.bytesToHex(privateKey),
+      ),
+      _storage.write(
+        key: _signingPublicKeyTag,
+        value: KeyGenerator.bytesToHex(publicKey),
+      ),
+    ]);
   }
 
   /// Load the Ed25519 signing key pair from secure storage.

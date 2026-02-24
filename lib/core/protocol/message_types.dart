@@ -48,10 +48,10 @@ enum MessageType {
   const MessageType(this.value);
   final int value;
 
-  static MessageType? fromValue(int value) {
-    for (final type in MessageType.values) {
-      if (type.value == value) return type;
-    }
-    return null;
-  }
+  /// O(1) lookup map built once at class load time.
+  static final Map<int, MessageType> _byValue = {
+    for (final t in MessageType.values) t.value: t,
+  };
+
+  static MessageType? fromValue(int value) => _byValue[value];
 }

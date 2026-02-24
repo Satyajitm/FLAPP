@@ -38,6 +38,26 @@ class GroupCipher {
     return m;
   }();
 
+  /// Return (or create) a cached [SecureKey] for [groupKey].
+  ///
+  /// Avoids allocating a new libsodium secure buffer on every encrypt/decrypt
+  /// call. The cache is invalidated when the key bytes change.
+  SecureKey _getGroupSecureKey(Uint8List groupKey) {
+    final sodium = sodiumInstance;
+    final cached = _cachedGroupSecureKey;
+    final cachedBytes = _cachedGroupKeyBytes;
+    if (cached != null &&
+        cachedBytes != null &&
+        bytesEqual(cachedBytes, groupKey)) {
+      return cached;
+    }
+    cached?.dispose();
+    final key = SecureKey.fromList(sodium, groupKey);
+    _cachedGroupSecureKey = key;
+    _cachedGroupKeyBytes = groupKey;
+    return key;
+  }
+
   /// Encrypt data with the given group key using ChaCha20-Poly1305.
   ///
   /// Returns nonce prepended to ciphertext, or null if [groupKey] is null.
@@ -52,7 +72,7 @@ class GroupCipher {
     final ciphertext = sodium.crypto.aead.encrypt(
       message: plaintext,
       nonce: nonce,
-      key: SecureKey.fromList(sodium, groupKey),
+      key: _getGroupSecureKey(groupKey),
     );
 
     // Prepend nonce to ciphertext
@@ -79,7 +99,7 @@ class GroupCipher {
       return sodium.crypto.aead.decrypt(
         cipherText: ciphertext,
         nonce: nonce,
-        key: SecureKey.fromList(sodium, groupKey),
+        key: _getGroupSecureKey(groupKey),
       );
     } catch (_) {
       return null; // Decryption failed — wrong group key

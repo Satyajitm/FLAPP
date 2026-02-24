@@ -61,10 +61,7 @@ class MeshEmergencyRepository implements EmergencyRepository {
 
     final alert = EmergencyAlert(
       sender: PeerId(packet.sourceId),
-      type: EmergencyAlertType.values.firstWhere(
-        (t) => t.value == payload.alertType,
-        orElse: () => EmergencyAlertType.sos,
-      ),
+      type: EmergencyAlertType.fromValue(payload.alertType) ?? EmergencyAlertType.sos,
       latitude: payload.latitude,
       longitude: payload.longitude,
       message: payload.message,

@@ -85,12 +85,7 @@ class MessageDeduplicator {
       _lookup.remove(_entries[i].id);
     }
     _head += removeCount;
-
-    // Compact when head exceeds 25% of the list (smaller, more frequent GC batches)
-    if (_head > _entries.length ~/ 4) {
-      _entries.removeRange(0, _head);
-      _head = 0;
-    }
+    _compactIfNeeded();
   }
 
   void _cleanupOldEntries(DateTime cutoff) {
@@ -98,7 +93,14 @@ class MessageDeduplicator {
       _lookup.remove(_entries[_head].id);
       _head++;
     }
-    // Compact when head exceeds 25% of the list (consistent with _trimIfNeeded)
+    _compactIfNeeded();
+  }
+
+  /// Compact the backing list when the dead-head zone exceeds 25% of its size.
+  ///
+  /// Extracted from both [_trimIfNeeded] and [_cleanupOldEntries] to avoid
+  /// duplicating the same logic in two places.
+  void _compactIfNeeded() {
     if (_head > 0 && _head > _entries.length ~/ 4) {
       _entries.removeRange(0, _head);
       _head = 0;
