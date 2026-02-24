@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:typed_data';
 import '../protocol/packet.dart';
 import '../transport/transport.dart';
@@ -15,7 +16,9 @@ class GossipSyncManager {
 
   /// Stores recent packets by their packet ID for syncing.
   final Map<String, _StoredPacket> _seenPackets = {};
-  final List<String> _packetOrder = [];
+
+  /// Insertion-order queue of packet IDs for O(1) front-removal (capacity enforcement).
+  final Queue<String> _packetOrder = Queue();
 
   Timer? _maintenanceTimer;
 
@@ -51,9 +54,9 @@ class GossipSyncManager {
     );
     _packetOrder.add(id);
 
-    // Enforce capacity
+    // Enforce capacity — O(1) removal from the front of the queue.
     while (_packetOrder.length > config.seenCapacity) {
-      final victim = _packetOrder.removeAt(0);
+      final victim = _packetOrder.removeFirst();
       _seenPackets.remove(victim);
     }
   }

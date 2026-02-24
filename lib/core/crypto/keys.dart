@@ -1,15 +1,8 @@
 import 'dart:typed_data';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import '../../shared/hex_utils.dart';
 import 'sodium_instance.dart';
 import 'signatures.dart';
-
-/// 256-entry lookup table: byte value → two-character lowercase hex string.
-/// Pre-computed once at startup; avoids calling toRadixString(16) per byte.
-final List<String> _hexTable = List.generate(
-  256,
-  (i) => i.toRadixString(16).padLeft(2, '0'),
-  growable: false,
-);
 
 /// Pure key generation logic — no storage dependencies (ISP).
 class KeyGenerator {
@@ -37,19 +30,9 @@ class KeyGenerator {
     return sodium.crypto.genericHash(message: publicKey, outLen: 32);
   }
 
-  static String bytesToHex(Uint8List bytes) {
-    final buf = StringBuffer();
-    for (final b in bytes) { buf.write(_hexTable[b]); }
-    return buf.toString();
-  }
+  static String bytesToHex(Uint8List bytes) => HexUtils.encode(bytes);
 
-  static Uint8List hexToBytes(String hex) {
-    final bytes = Uint8List(hex.length ~/ 2);
-    for (var i = 0; i < bytes.length; i++) {
-      bytes[i] = int.parse(hex.substring(i * 2, i * 2 + 2), radix: 16);
-    }
-    return bytes;
-  }
+  static Uint8List hexToBytes(String hex) => HexUtils.decode(hex);
 }
 
 /// Secure storage for cryptographic keys (ISP).

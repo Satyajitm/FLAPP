@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:typed_data';
+import '../../shared/hex_utils.dart';
 import '../protocol/packet.dart';
 
 /// Peer connection info exposed by the transport layer.
@@ -16,8 +17,7 @@ class PeerConnection {
     this.signingPublicKey,
   }) : connectedAt = connectedAt ?? DateTime.now();
 
-  String get peerIdHex =>
-      peerId.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+  String get peerIdHex => HexUtils.encode(peerId);
 }
 
 /// Abstract transport interface.

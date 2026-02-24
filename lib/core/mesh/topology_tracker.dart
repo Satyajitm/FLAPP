@@ -40,7 +40,8 @@ class TopologyTracker {
 
     _claims[srcId] = validNeighbors;
     _lastSeen[srcId] = DateTime.now();
-    _routeCache.clear(); // Topology changed — invalidate all cached routes.
+    // Granular cache invalidation: only remove routes that pass through srcId.
+    _invalidateRoutesFor(srcId);
   }
 
   /// Remove a peer from the topology.
@@ -49,7 +50,7 @@ class TopologyTracker {
     if (id == null) return;
     _claims.remove(id);
     _lastSeen.remove(id);
-    _routeCache.clear();
+    _invalidateRoutesFor(id);
   }
 
   /// Prune nodes that haven't updated their topology in [age].
@@ -145,6 +146,27 @@ class TopologyTracker {
 
     _routeCache[cacheKey] = (route: null, cachedAt: DateTime.now());
     return null; // No route found
+  }
+
+  /// Invalidate only the route cache entries that involve [nodeId].
+  ///
+  /// Cache keys are "$source:$target:$maxHops". We remove any entry where
+  /// [nodeId] appears as the source, target, or as part of the cached route.
+  /// This is cheaper than clearing the entire cache when only one node changes.
+  void _invalidateRoutesFor(String nodeId) {
+    _routeCache.removeWhere((key, value) {
+      // Key format: "source:target:maxHops"
+      final parts = key.split(':');
+      if (parts.length >= 2 && (parts[0] == nodeId || parts[1] == nodeId)) {
+        return true;
+      }
+      // Also remove entries whose cached route passes through nodeId.
+      final route = value.route;
+      if (route != null) {
+        return route.any((hop) => HexUtils.encode(hop) == nodeId);
+      }
+      return false;
+    });
   }
 
   /// Reset all topology state.

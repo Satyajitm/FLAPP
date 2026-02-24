@@ -276,9 +276,20 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final group = ref.watch(activeGroupProvider);
     final messages = chatState.messages;
 
-    if (messages.isNotEmpty) {
-      _scrollToBottom();
-    }
+    // Scroll to bottom only when the last message ID changes (i.e., a new
+    // message arrived). ref.listen handles this via the onPacketReceived path,
+    // but we also drive it here via select() so rebuilds caused by other state
+    // changes (isSending, group change) do NOT trigger an unwanted scroll.
+    ref.listen<String?>(
+      chatControllerProvider.select(
+        (s) => s.messages.isEmpty ? null : s.messages.last.id,
+      ),
+      (previous, next) {
+        if (next != null && next != previous) {
+          _scrollToBottom();
+        }
+      },
+    );
 
     final memberCount = group?.members.length ?? 0;
 

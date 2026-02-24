@@ -558,10 +558,10 @@ class BleTransport extends Transport {
     // log only the byte length to avoid leaking type/timestamp to log aggregators.
     _log('Broadcasting packet, len=${data.length}');
 
-    // Send via central connections (write to peers' characteristics).
+    // Send via central connections (write to peers' characteristics) in parallel.
     // C2: Encrypt through the per-peer Noise session where available so that
     // packet headers are not observable by passive BLE sniffers.
-    for (final entry in _peerCharacteristics.entries) {
+    final centralFutures = _peerCharacteristics.entries.map((entry) async {
       try {
         var sendData = data;
         if (_noiseSessionManager.hasSession(entry.key)) {
@@ -573,18 +573,22 @@ class BleTransport extends Transport {
       } catch (e) {
         _log('Failed to send to ${entry.key}: $e');
       }
-    }
+    });
 
-    // Also notify via peripheral (GATT server) to any connected centrals
-    try {
-      await ble_p.BlePeripheral.updateCharacteristic(
-        characteristicId: packetCharUuidStr,
-        value: data,
-      );
-      _log('Updated peripheral characteristic');
-    } catch (e) {
-      _log('Failed to update characteristic: $e');
-    }
+    // Also notify via peripheral (GATT server) to any connected centrals.
+    final peripheralFuture = () async {
+      try {
+        await ble_p.BlePeripheral.updateCharacteristic(
+          characteristicId: packetCharUuidStr,
+          value: data,
+        );
+        _log('Updated peripheral characteristic');
+      } catch (e) {
+        _log('Failed to update characteristic: $e');
+      }
+    }();
+
+    await Future.wait([...centralFutures, peripheralFuture]);
   }
 
   // ---------------------------------------------------------------------------

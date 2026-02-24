@@ -133,6 +133,13 @@ class ChatController extends StateNotifier<ChatState> {
       newStatus = MessageStatus.read;
     }
 
+    // Only update state and persist if something actually changed.
+    if (newStatus == msg.status &&
+        newDeliveredTo.length == msg.deliveredTo.length &&
+        newReadBy.length == msg.readBy.length) {
+      return;
+    }
+
     messages[index] = msg.copyWith(
       status: newStatus,
       deliveredTo: newDeliveredTo,
@@ -140,7 +147,9 @@ class ChatController extends StateNotifier<ChatState> {
     );
 
     state = state.copyWith(messages: messages);
-    await _persistMessages();
+    // Receipt status changes (delivered/read ticks) are persisted lazily —
+    // the debounced MessageStorageService write is sufficient here.
+    _storageService?.saveMessages(_groupId ?? '', state.messages);
   }
 
   /// Mark incoming messages as read and send read receipts.

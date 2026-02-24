@@ -8,7 +8,12 @@ class PeerId {
   /// The raw 32-byte peer ID.
   final Uint8List bytes;
 
-  PeerId(this.bytes) : assert(bytes.length == 32);
+  /// Cached hash code — computed once at construction time.
+  final int _hashCode;
+
+  PeerId(this.bytes)
+      : assert(bytes.length == 32),
+        _hashCode = Object.hashAll(bytes);
 
   /// Create a PeerId from a hex string.
   ///
@@ -38,19 +43,11 @@ class PeerId {
 
   @override
   bool operator ==(Object other) =>
-      other is PeerId && _bytesEqual(bytes, other.bytes);
+      other is PeerId && bytesEqual(bytes, other.bytes);
 
   @override
-  int get hashCode => Object.hashAll(bytes);
+  int get hashCode => _hashCode;
 
   @override
   String toString() => 'PeerId($shortId...)';
-
-  static bool _bytesEqual(Uint8List a, Uint8List b) {
-    if (a.length != b.length) return false;
-    for (var i = 0; i < a.length; i++) {
-      if (a[i] != b[i]) return false;
-    }
-    return true;
-  }
 }

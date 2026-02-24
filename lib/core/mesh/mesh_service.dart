@@ -256,7 +256,7 @@ class MeshService implements Transport {
   // ---------------------------------------------------------------------------
 
   Future<void> _maybeRelay(FluxonPacket packet) async {
-    final isMine = _bytesEqual(packet.sourceId, _myPeerId);
+    final isMine = bytesEqual(packet.sourceId, _myPeerId);
 
     final decision = RelayController.decide(
       ttl: packet.ttl,
@@ -333,13 +333,22 @@ class MeshService implements Transport {
     }
   }
 
-  Future<void> _sendDiscoveryAnnounce() async {
+  Future<void> _sendDiscoveryAnnounce() =>
+      _sendAnnounce(MessageType.discovery);
+
+  Future<void> _sendTopologyAnnounce() =>
+      _sendAnnounce(MessageType.topologyAnnounce);
+
+  /// Shared implementation for discovery and topology announce packets.
+  ///
+  /// Both packets carry the same neighbor-list payload; only the [type] differs.
+  Future<void> _sendAnnounce(MessageType type) async {
     final neighborIds = _currentPeers.map((p) => p.peerId).toList();
     final payload = BinaryProtocol.encodeDiscoveryPayload(
       neighbors: neighborIds,
     );
     final packet = BinaryProtocol.buildPacket(
-      type: MessageType.discovery,
+      type: type,
       sourceId: _myPeerId,
       payload: payload,
       ttl: FluxonPacket.maxTTL,
@@ -347,29 +356,4 @@ class MeshService implements Transport {
     await _rawTransport.broadcastPacket(packet);
   }
 
-  Future<void> _sendTopologyAnnounce() async {
-    final neighborIds = _currentPeers.map((p) => p.peerId).toList();
-    final payload = BinaryProtocol.encodeDiscoveryPayload(
-      neighbors: neighborIds,
-    );
-    final packet = BinaryProtocol.buildPacket(
-      type: MessageType.topologyAnnounce,
-      sourceId: _myPeerId,
-      payload: payload,
-      ttl: FluxonPacket.maxTTL,
-    );
-    await _rawTransport.broadcastPacket(packet);
-  }
-
-  // ---------------------------------------------------------------------------
-  // Helpers
-  // ---------------------------------------------------------------------------
-
-  static bool _bytesEqual(Uint8List a, Uint8List b) {
-    if (a.length != b.length) return false;
-    for (var i = 0; i < a.length; i++) {
-      if (a[i] != b[i]) return false;
-    }
-    return true;
-  }
 }

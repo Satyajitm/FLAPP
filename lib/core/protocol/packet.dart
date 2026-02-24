@@ -1,4 +1,5 @@
 import 'dart:typed_data';
+import '../../shared/hex_utils.dart';
 import 'message_types.dart';
 
 /// Binary packet structure for the Fluxon mesh protocol.
@@ -28,6 +29,9 @@ class FluxonPacket {
   final Uint8List payload;
   final Uint8List? signature; // 64-byte Ed25519 signature
 
+  /// Cached packet ID (computed once, never changes).
+  late final String packetId = _computePacketId();
+
   FluxonPacket({
     required this.type,
     required this.ttl,
@@ -42,10 +46,11 @@ class FluxonPacket {
   /// Whether this packet is a broadcast (destId is all zeros).
   bool get isBroadcast => destId.every((b) => b == 0);
 
-  /// Unique packet identifier for deduplication: sourceId + timestamp + type.
-  String get packetId {
-    final src = sourceId.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-    return '$src:$timestamp:${type.value}';
+  /// Compute the unique packet identifier for deduplication.
+  ///
+  /// Called once during construction via the [packetId] late final field.
+  String _computePacketId() {
+    return '${HexUtils.encode(sourceId)}:$timestamp:${type.value}';
   }
 
   /// Create a copy with a signature attached.

@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:sodium_libs/sodium_libs.dart';
+import '../../shared/hex_utils.dart';
 import '../crypto/sodium_instance.dart';
 
 /// Handles symmetric encryption/decryption for group communication.
@@ -18,6 +19,14 @@ class GroupCipher {
   /// Cache of passphrase+salt → derived key+groupId to avoid running
   /// the expensive Argon2id twice on create/join.
   final Map<String, _DerivedGroup> _derivationCache = {};
+
+  /// Cached [SecureKey] for the active group key.
+  ///
+  /// Re-using a single [SecureKey] wrapper avoids allocating a new libsodium
+  /// secure buffer on every [encrypt]/[decrypt] call. Invalidated whenever
+  /// the key bytes change.
+  SecureKey? _cachedGroupSecureKey;
+  Uint8List? _cachedGroupKeyBytes;
 
   // RFC 4648 base32 alphabet (no padding character)
   static const _b32Chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
