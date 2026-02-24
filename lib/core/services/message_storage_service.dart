@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
@@ -15,6 +16,15 @@ import '../../features/chat/message_model.dart';
 class MessageStorageService {
   /// Cached directory path to avoid repeated lookups.
   String? _cachedDirPath;
+
+  /// Pending writes: groupId → latest message list. Flushed every 5 seconds
+  /// or when the batch reaches 10 unsaved messages, whichever comes first.
+  final Map<String, List<ChatMessage>> _pendingWrites = {};
+  int _pendingSinceLastFlush = 0;
+  Timer? _debounceTimer;
+
+  static const _debounceInterval = Duration(seconds: 5);
+  static const _batchSize = 10;
 
   /// Resolve the storage directory path (cached after first call).
   ///
@@ -39,7 +49,11 @@ class MessageStorageService {
   /// Load all persisted messages for a specific group.
   ///
   /// Returns an empty list if the file does not exist or is malformed.
+  /// Flushes any pending debounced write for this group first.
   Future<List<ChatMessage>> loadMessages(String groupId) async {
+    if (_pendingWrites.containsKey(groupId)) {
+      await _flushPendingWrites();
+    }
     try {
       final file = await getFileForGroup(groupId);
       if (!await file.exists()) return [];
@@ -58,10 +72,39 @@ class MessageStorageService {
   }
 
   /// Persist the full message list for a group to disk.
+  ///
+  /// Writes are batched: the actual disk write is deferred by up to 5 seconds
+  /// or until 10 unsaved messages have accumulated, whichever comes first.
+  /// Call [flush] to write immediately (e.g. on app suspend).
   Future<void> saveMessages(String groupId, List<ChatMessage> messages) async {
-    final file = await getFileForGroup(groupId);
-    final jsonList = messages.map((m) => m.toJson()).toList();
-    await file.writeAsString(jsonEncode(jsonList), flush: true);
+    _pendingWrites[groupId] = messages;
+    _pendingSinceLastFlush++;
+
+    if (_pendingSinceLastFlush >= _batchSize) {
+      _debounceTimer?.cancel();
+      _debounceTimer = null;
+      await _flushPendingWrites();
+    } else {
+      _debounceTimer?.cancel();
+      _debounceTimer = Timer(_debounceInterval, () {
+        _flushPendingWrites();
+      });
+    }
+  }
+
+  /// Immediately flush all pending writes to disk.
+  Future<void> flush() => _flushPendingWrites();
+
+  Future<void> _flushPendingWrites() async {
+    if (_pendingWrites.isEmpty) return;
+    final writes = Map.of(_pendingWrites);
+    _pendingWrites.clear();
+    _pendingSinceLastFlush = 0;
+    for (final entry in writes.entries) {
+      final file = await getFileForGroup(entry.key);
+      final jsonList = entry.value.map((m) => m.toJson()).toList();
+      await file.writeAsString(jsonEncode(jsonList), flush: true);
+    }
   }
 
   /// Delete a single message by its [id] and re-save.
@@ -74,8 +117,19 @@ class MessageStorageService {
     await saveMessages(groupId, filtered);
   }
 
+  /// Cancel the debounce timer and synchronously flush any pending writes.
+  ///
+  /// Call this from [Provider.onDispose] to avoid losing messages on
+  /// provider disposal (e.g. group change or app shutdown).
+  Future<void> dispose() async {
+    _debounceTimer?.cancel();
+    _debounceTimer = null;
+    await _flushPendingWrites();
+  }
+
   /// Delete all persisted messages for a group (removes the file).
   Future<void> deleteAllMessages(String groupId) async {
+    _pendingWrites.remove(groupId); // Discard any queued write for this group.
     final file = await getFileForGroup(groupId);
     if (await file.exists()) {
       await file.delete();

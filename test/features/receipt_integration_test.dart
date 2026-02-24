@@ -371,9 +371,10 @@ void main() {
           .toList();
       expect(readAcks, hasLength(1));
 
-      final decoded =
-          BinaryProtocol.decodeReceiptPayload(readAcks.first.payload);
-      expect(decoded!.receiptType, equals(ReceiptType.read));
+      final batch =
+          BinaryProtocol.decodeBatchReceiptPayload(readAcks.first.payload);
+      expect(batch, isNotNull);
+      expect(batch!.first.receiptType, equals(ReceiptType.read));
     });
 
     test('receipts from multiple peers accumulate', () async {

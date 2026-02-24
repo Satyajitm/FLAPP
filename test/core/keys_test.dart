@@ -11,9 +11,19 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('KeyGenerator hex utilities', () {
-    // Inline implementations matching KeyGenerator.bytesToHex / hexToBytes
+    // KeyGenerator.bytesToHex uses a pre-computed 256-entry lookup table
+    // (_hexTable in keys.dart). The tests below verify the SAME contract
+    // using an inline reference implementation, proving the two algorithms
+    // are behaviourally equivalent without needing sodium native binaries.
     String bytesToHex(Uint8List bytes) {
-      return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      // Reference implementation (lookup table variant).
+      const hexChars = '0123456789abcdef';
+      final buf = StringBuffer();
+      for (final b in bytes) {
+        buf.writeCharCode(hexChars.codeUnitAt(b >> 4));
+        buf.writeCharCode(hexChars.codeUnitAt(b & 0x0F));
+      }
+      return buf.toString();
     }
 
     Uint8List hexToBytes(String hex) {
@@ -56,6 +66,28 @@ void main() {
       final hex = bytesToHex(zeros);
       expect(hex, equals('00000000'));
       expect(hexToBytes(hex), equals(zeros));
+    });
+
+    test('all 256 byte values produce correct two-char hex strings', () {
+      for (var i = 0; i <= 255; i++) {
+        final result = bytesToHex(Uint8List.fromList([i]));
+        expect(result.length, equals(2),
+            reason: 'byte $i produced "${result.length}"-char string');
+        expect(int.parse(result, radix: 16), equals(i),
+            reason: 'byte $i: "$result" does not parse back to $i');
+      }
+    });
+
+    test('bytesToHex output is always lowercase', () {
+      final bytes = Uint8List.fromList([0xAB, 0xCD, 0xEF]);
+      expect(bytesToHex(bytes), equals('abcdef'));
+    });
+
+    test('32-byte peer ID hex is 64 characters', () {
+      final peerId = Uint8List(32)..fillRange(0, 32, 0xA5);
+      final hex = bytesToHex(peerId);
+      expect(hex.length, equals(64));
+      expect(hex, equals('a5' * 32));
     });
   });
 

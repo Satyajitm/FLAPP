@@ -52,6 +52,10 @@ class BleTransport extends Transport {
   /// Reverse map: Fluxon peer ID hex to BLE device ID.
   final Map<String, String> _peerHexToDevice = {};
 
+  /// Negotiated MTU per BLE device ID. Defaults to 23 (BLE minimum) when
+  /// negotiation fails. Used to warn when packets may exceed the link MTU.
+  final Map<String, int> _deviceMtu = {};
+
   bool _running = false;
   StreamSubscription? _scanSubscription;
   Timer? _scanRestartTimer;
@@ -166,6 +170,7 @@ class BleTransport extends Transport {
     _peerCharacteristics.clear();
     _deviceToPeerHex.clear();
     _peerHexToDevice.clear();
+    _deviceMtu.clear();
     _noiseSessionManager.clear();
     _emitPeerUpdate();
   }
@@ -299,9 +304,9 @@ class BleTransport extends Transport {
     // Start in active mode.
     _enterActiveMode();
 
-    // Idle check fires every second to detect activity/inactivity transitions.
+    // Idle check fires every 10s — sufficient for a 30s idle threshold.
     _idleCheckTimer?.cancel();
-    _idleCheckTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+    _idleCheckTimer = Timer.periodic(const Duration(seconds: 10), (_) {
       if (!_running) return;
       final idleSeconds =
           DateTime.now().difference(_lastActivityTimestamp).inSeconds;
@@ -316,8 +321,8 @@ class BleTransport extends Transport {
     });
   }
 
-  /// Active scan mode: continuous 15-second scans restarted every 18 seconds.
-  /// This is the pre-existing behaviour, preserved exactly.
+  /// Active scan mode: 14-second scans restarted every 14.5 seconds.
+  /// The 0.5 s overlap budget eliminates the previous 3 s blind window.
   void _enterActiveMode() {
     if (!_running) return;
     _isInIdleMode = false;
@@ -325,13 +330,13 @@ class BleTransport extends Transport {
     _dutyCycleOffTimer = null;
     _scanRestartTimer?.cancel();
 
-    _log('Active scan mode: 15 s scan / 18 s restart');
-    FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
+    _log('Active scan mode: 14 s scan / 14.5 s restart');
+    FlutterBluePlus.startScan(timeout: const Duration(seconds: 14));
 
-    _scanRestartTimer = Timer.periodic(const Duration(seconds: 18), (_) {
+    _scanRestartTimer = Timer.periodic(const Duration(milliseconds: 14500), (_) {
       if (!_running || _isInIdleMode) return;
       _log('Active mode: restarting scan...');
-      FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
+      FlutterBluePlus.startScan(timeout: const Duration(seconds: 14));
     });
   }
 
@@ -394,9 +399,14 @@ class BleTransport extends Transport {
       // Negotiate larger MTU for mesh packets (header 78 + payload + sig 64)
       try {
         final mtu = await result.device.requestMtu(512);
+        _deviceMtu[deviceId] = mtu;
         _log('Negotiated MTU: $mtu for $deviceId');
+        if (mtu < 256) {
+          _log('WARNING: MTU $mtu < 256 for $deviceId — large packets may be silently truncated');
+        }
       } catch (e) {
-        _log('MTU negotiation failed for $deviceId (using default): $e');
+        _deviceMtu[deviceId] = 23; // BLE minimum
+        _log('MTU negotiation failed for $deviceId (defaulting to 23 bytes): $e');
       }
 
       _log('Discovering services on $deviceId...');
@@ -457,6 +467,7 @@ class BleTransport extends Transport {
           _peerConnections.remove(deviceId);
           _peerCharacteristics.remove(deviceId);
           _connectingDevices.remove(deviceId);
+          _deviceMtu.remove(deviceId);
           _emitPeerUpdate();
         }
       });

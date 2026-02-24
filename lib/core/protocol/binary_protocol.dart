@@ -192,6 +192,56 @@ class BinaryProtocol {
     );
   }
 
+  /// Sentinel byte that identifies a batch receipt payload.
+  static const _batchReceiptSentinel = 0xFF;
+
+  /// Maximum receipts per batch (count fits in one unsigned byte).
+  static const maxBatchReceiptCount = 255;
+
+  /// Encode multiple receipts into a single payload.
+  ///
+  /// Format: `[0xFF:1][count:1][receiptType:1][timestamp:8][senderId:32]...`
+  ///
+  /// At most [maxBatchReceiptCount] receipts are encoded; excess entries are
+  /// silently dropped (they will be sent in the next flush cycle).
+  static Uint8List encodeBatchReceiptPayload(List<ReceiptPayload> receipts) {
+    final count = receipts.length.clamp(0, maxBatchReceiptCount);
+    final buffer = ByteData(2 + count * 41);
+    buffer.setUint8(0, _batchReceiptSentinel);
+    buffer.setUint8(1, count); // safe: count is clamped to 0..255
+    final bytes = buffer.buffer.asUint8List();
+    for (var i = 0; i < count; i++) {
+      final offset = 2 + i * 41;
+      bytes[offset] = receipts[i].receiptType;
+      ByteData.sublistView(bytes, offset + 1, offset + 9)
+          .setInt64(0, receipts[i].originalTimestamp);
+      bytes.setRange(offset + 9, offset + 41, receipts[i].originalSenderId);
+    }
+    return bytes;
+  }
+
+  /// Decode a batch receipt payload. Returns null if the data is not a valid batch.
+  static List<ReceiptPayload>? decodeBatchReceiptPayload(Uint8List data) {
+    if (data.length < 2) return null;
+    if (data[0] != _batchReceiptSentinel) return null;
+    final count = data[1];
+    if (data.length < 2 + count * 41) return null;
+    final result = <ReceiptPayload>[];
+    for (var i = 0; i < count; i++) {
+      final offset = 2 + i * 41;
+      final receiptType = data[offset];
+      final timestamp =
+          ByteData.sublistView(data, offset + 1, offset + 9).getInt64(0);
+      final senderId = Uint8List.fromList(data.sublist(offset + 9, offset + 41));
+      result.add(ReceiptPayload(
+        receiptType: receiptType,
+        originalTimestamp: timestamp,
+        originalSenderId: senderId,
+      ));
+    }
+    return result;
+  }
+
   /// Build a complete FluxonPacket from components.
   static FluxonPacket buildPacket({
     required MessageType type,

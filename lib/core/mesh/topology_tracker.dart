@@ -19,6 +19,12 @@ class TopologyTracker {
   /// Last time we received an update from a node.
   final Map<String, DateTime> _lastSeen = {};
 
+  /// Route cache: "$source:$target" → computed route (or null = no route).
+  /// Invalidated on any topology change. Entries older than [_routeCacheTtl]
+  /// are discarded on the next [computeRoute] call for that pair.
+  final Map<String, ({List<Uint8List>? route, DateTime cachedAt})> _routeCache = {};
+  static const Duration _routeCacheTtl = Duration(seconds: 5);
+
   /// Update the topology with a node's self-reported neighbor list.
   void updateNeighbors({required Uint8List source, required List<Uint8List> neighbors}) {
     final srcId = _sanitize(source);
@@ -34,6 +40,7 @@ class TopologyTracker {
 
     _claims[srcId] = validNeighbors;
     _lastSeen[srcId] = DateTime.now();
+    _routeCache.clear(); // Topology changed — invalidate all cached routes.
   }
 
   /// Remove a peer from the topology.
@@ -42,6 +49,7 @@ class TopologyTracker {
     if (id == null) return;
     _claims.remove(id);
     _lastSeen.remove(id);
+    _routeCache.clear();
   }
 
   /// Prune nodes that haven't updated their topology in [age].
@@ -51,16 +59,21 @@ class TopologyTracker {
         .where((e) => e.value.isBefore(deadline))
         .map((e) => e.key)
         .toList();
+    if (stale.isEmpty) return;
     for (final peer in stale) {
       _claims.remove(peer);
       _lastSeen.remove(peer);
     }
+    // Cached routes may go through pruned nodes — invalidate.
+    _routeCache.clear();
   }
 
   /// Compute the shortest route from [start] to [goal] using BFS.
   ///
   /// Returns a list of intermediate hop IDs (excluding start and goal),
   /// or null if no route exists. Returns empty list for direct neighbors.
+  ///
+  /// Results are cached for [_routeCacheTtl] and invalidated on topology change.
   List<Uint8List>? computeRoute({
     required Uint8List start,
     required Uint8List goal,
@@ -70,6 +83,13 @@ class TopologyTracker {
     final target = _sanitize(goal);
     if (source == null || target == null) return null;
     if (source == target) return []; // Direct connection
+
+    final cacheKey = '$source:$target:$maxHops';
+    final cached = _routeCache[cacheKey];
+    if (cached != null &&
+        DateTime.now().difference(cached.cachedAt) < _routeCacheTtl) {
+      return cached.route;
+    }
 
     final now = DateTime.now();
     final freshnessDeadline = now.subtract(routeFreshnessThreshold);
@@ -110,10 +130,12 @@ class TopologyTracker {
 
         if (neighbor == target) {
           // Return only intermediate hops (excluding source and target)
-          return nextPath
+          final route = nextPath
               .sublist(1, nextPath.length - 1)
               .map((id) => HexUtils.decode(id))
               .toList();
+          _routeCache[cacheKey] = (route: route, cachedAt: DateTime.now());
+          return route;
         }
 
         visited.add(neighbor);
@@ -121,6 +143,7 @@ class TopologyTracker {
       }
     }
 
+    _routeCache[cacheKey] = (route: null, cachedAt: DateTime.now());
     return null; // No route found
   }
 
@@ -128,6 +151,7 @@ class TopologyTracker {
   void reset() {
     _claims.clear();
     _lastSeen.clear();
+    _routeCache.clear();
   }
 
   /// Number of known nodes in the topology.

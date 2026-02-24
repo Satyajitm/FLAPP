@@ -277,7 +277,7 @@ void main() {
       const config = GossipSyncConfig();
       expect(config.seenCapacity, equals(1000));
       expect(config.maxMessageAgeSeconds, equals(900));
-      expect(config.maintenanceIntervalSeconds, equals(30));
+      expect(config.maintenanceIntervalSeconds, equals(60));
       expect(config.syncIntervalSeconds, equals(15));
     });
 

@@ -331,6 +331,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                         itemCount: messages.length,
                         itemBuilder: (context, index) {
                           return _MessageBubble(
+                            key: ValueKey(messages[index].id),
                             message: messages[index],
                             onLongPress: () =>
                                 _confirmDeleteMessage(messages[index].id),
@@ -525,7 +526,7 @@ class _MessageBubble extends StatelessWidget {
   final ChatMessage message;
   final VoidCallback? onLongPress;
 
-  const _MessageBubble({required this.message, this.onLongPress});
+  const _MessageBubble({super.key, required this.message, this.onLongPress});
 
   @override
   Widget build(BuildContext context) {

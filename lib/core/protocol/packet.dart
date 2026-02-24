@@ -128,9 +128,9 @@ class FluxonPacket {
     final diff = (timestamp - now).abs();
     if (diff > 5 * 60 * 1000) return null;
 
-    final sourceId = Uint8List.fromList(Uint8List.sublistView(data, offset, offset + 32));
+    final sourceId = Uint8List.sublistView(data, offset, offset + 32);
     offset += 32;
-    final destId = Uint8List.fromList(Uint8List.sublistView(data, offset, offset + 32));
+    final destId = Uint8List.sublistView(data, offset, offset + 32);
     offset += 32;
 
     final payloadLen = buffer.getUint16(offset);
@@ -143,12 +143,12 @@ class FluxonPacket {
       return null;
     }
 
-    final payload = Uint8List.fromList(Uint8List.sublistView(data, offset, offset + payloadLen));
+    final payload = Uint8List.sublistView(data, offset, offset + payloadLen);
     offset += payloadLen;
 
     Uint8List? signature;
     if (hasSignature) {
-      signature = Uint8List.fromList(Uint8List.sublistView(data, offset, offset + signatureSize));
+      signature = Uint8List.sublistView(data, offset, offset + signatureSize);
     }
 
     return FluxonPacket(

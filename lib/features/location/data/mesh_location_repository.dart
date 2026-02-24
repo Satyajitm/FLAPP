@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 import '../../../core/device/device_services.dart';
+import '../../../shared/logger.dart';
 import '../../../core/identity/group_manager.dart';
 import '../../../core/identity/peer_id.dart';
 import '../../../core/protocol/binary_protocol.dart';
@@ -42,7 +43,12 @@ class MeshLocationRepository implements LocationRepository {
   void _listenForLocationUpdates() {
     _packetSub = _transport.onPacketReceived
         .where((p) => p.type == MessageType.locationUpdate)
-        .listen(_handleIncomingPacket);
+        .listen(
+          _handleIncomingPacket,
+          onError: (Object e) => SecureLogger.warning(
+            'MeshLocationRepository: transport stream error: $e',
+          ),
+        );
   }
 
   void _handleIncomingPacket(FluxonPacket packet) {

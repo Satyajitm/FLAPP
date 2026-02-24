@@ -508,8 +508,9 @@ void main() {
           .toList();
       expect(acks, hasLength(1));
 
-      final decoded = BinaryProtocol.decodeReceiptPayload(acks.first.payload);
-      expect(decoded!.receiptType, equals(ReceiptType.read));
+      final batch = BinaryProtocol.decodeBatchReceiptPayload(acks.first.payload);
+      expect(batch, isNotNull);
+      expect(batch!.first.receiptType, equals(ReceiptType.read));
     });
 
     test('no receipt sent for self-sourced packets', () async {

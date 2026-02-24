@@ -240,8 +240,9 @@ void main() {
 
       expect(transport.broadcastedPackets, hasLength(1));
       final pkt = transport.broadcastedPackets.first;
-      final decoded = BinaryProtocol.decodeReceiptPayload(pkt.payload);
-      expect(decoded!.receiptType, equals(ReceiptType.read));
+      final batch = BinaryProtocol.decodeBatchReceiptPayload(pkt.payload);
+      expect(batch, isNotNull);
+      expect(batch!.first.receiptType, equals(ReceiptType.read));
     });
 
     test('incoming receipt from remote peer emits ReceiptEvent', () async {
@@ -373,12 +374,15 @@ void main() {
 
       await Future.delayed(const Duration(milliseconds: 2200));
 
-      // All three should be sent
-      expect(transport.broadcastedPackets, hasLength(3));
-      for (final pkt in transport.broadcastedPackets) {
-        expect(pkt.type, equals(MessageType.ack));
-        final decoded = BinaryProtocol.decodeReceiptPayload(pkt.payload);
-        expect(decoded!.receiptType, equals(ReceiptType.read));
+      // All three should be batched into a single packet
+      expect(transport.broadcastedPackets, hasLength(1));
+      final pkt = transport.broadcastedPackets.first;
+      expect(pkt.type, equals(MessageType.ack));
+      final batch = BinaryProtocol.decodeBatchReceiptPayload(pkt.payload);
+      expect(batch, isNotNull);
+      expect(batch, hasLength(3));
+      for (final decoded in batch!) {
+        expect(decoded.receiptType, equals(ReceiptType.read));
       }
     });
 
@@ -397,11 +401,13 @@ void main() {
 
       await Future.delayed(const Duration(milliseconds: 2200));
 
-      // Should only send one (last wins)
+      // Should only send one batch packet (last wins for duplicate messageId)
       expect(transport.broadcastedPackets, hasLength(1));
-      final decoded =
-          BinaryProtocol.decodeReceiptPayload(transport.broadcastedPackets.first.payload);
-      expect(decoded!.originalTimestamp, equals(2000));
+      final batch = BinaryProtocol.decodeBatchReceiptPayload(
+          transport.broadcastedPackets.first.payload);
+      expect(batch, isNotNull);
+      expect(batch, hasLength(1));
+      expect(batch!.first.originalTimestamp, equals(2000));
     });
 
     test('can queue new read receipts after a flush completes', () async {
@@ -427,9 +433,10 @@ void main() {
       await Future.delayed(const Duration(milliseconds: 2200));
       expect(transport.broadcastedPackets, hasLength(1));
 
-      final decoded =
-          BinaryProtocol.decodeReceiptPayload(transport.broadcastedPackets.first.payload);
-      expect(decoded!.originalTimestamp, equals(2000));
+      final batch = BinaryProtocol.decodeBatchReceiptPayload(
+          transport.broadcastedPackets.first.payload);
+      expect(batch, isNotNull);
+      expect(batch!.first.originalTimestamp, equals(2000));
     });
 
     test('non-ack packets are ignored by the service', () async {

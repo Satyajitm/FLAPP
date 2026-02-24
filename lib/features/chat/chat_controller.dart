@@ -71,32 +71,46 @@ class ChatController extends StateNotifier<ChatState> {
     if (_storageService == null || _groupId == null) return;
     final saved = await _storageService.loadMessages(_groupId);
     if (saved.isNotEmpty) {
-      state = state.copyWith(messages: saved);
+      final capped = saved.length > _maxInMemoryMessages
+          ? saved.sublist(saved.length - _maxInMemoryMessages)
+          : saved;
+      state = state.copyWith(messages: capped);
     }
   }
 
-  /// Save the current message list to disk (fire-and-forget).
-  void _persistMessages() {
+  /// Save the current message list to disk.
+  ///
+  /// Errors (e.g. disk full) are caught and logged; messages remain in memory.
+  Future<void> _persistMessages() async {
     if (_groupId == null) return;
-    _storageService?.saveMessages(_groupId, state.messages);
+    try {
+      await _storageService?.saveMessages(_groupId, state.messages);
+    } catch (_) {
+      // Disk write failed — messages remain in memory for this session.
+    }
   }
 
   void _listenForMessages() {
-    _messageSub = _repository.onMessageReceived.listen((message) {
-      state = state.copyWith(
-        messages: [...state.messages, message],
-      );
-      _persistMessages();
+    _messageSub = _repository.onMessageReceived.listen((message) async {
+      final updated = [...state.messages, message];
+      // Cap in-memory list at 200; older messages remain on disk.
+      final capped = updated.length > _maxInMemoryMessages
+          ? updated.sublist(updated.length - _maxInMemoryMessages)
+          : updated;
+      state = state.copyWith(messages: capped);
+      await _persistMessages();
     });
   }
+
+  static const _maxInMemoryMessages = 200;
 
   void _listenForReceipts() {
-    _receiptSub = _repository.onReceiptReceived.listen((receipt) {
-      _handleReceipt(receipt);
+    _receiptSub = _repository.onReceiptReceived.listen((receipt) async {
+      await _handleReceipt(receipt);
     });
   }
 
-  void _handleReceipt(ReceiptEvent receipt) {
+  Future<void> _handleReceipt(ReceiptEvent receipt) async {
     final messages = [...state.messages];
     final index = messages.indexWhere((m) => m.id == receipt.originalMessageId);
     if (index == -1) return;
@@ -126,7 +140,7 @@ class ChatController extends StateNotifier<ChatState> {
     );
 
     state = state.copyWith(messages: messages);
-    _persistMessages();
+    await _persistMessages();
   }
 
   /// Mark incoming messages as read and send read receipts.
@@ -155,21 +169,22 @@ class ChatController extends StateNotifier<ChatState> {
         senderName: _getDisplayName(),
       );
 
-      state = state.copyWith(
-        messages: [...state.messages, message],
-        isSending: false,
-      );
-      _persistMessages();
+      final updated = [...state.messages, message];
+      final capped = updated.length > _maxInMemoryMessages
+          ? updated.sublist(updated.length - _maxInMemoryMessages)
+          : updated;
+      state = state.copyWith(messages: capped, isSending: false);
+      await _persistMessages();
     } catch (_) {
       state = state.copyWith(isSending: false);
     }
   }
 
   /// Delete a single message by its ID.
-  void deleteMessage(String id) {
+  Future<void> deleteMessage(String id) async {
     final filtered = state.messages.where((m) => m.id != id).toList();
     state = state.copyWith(messages: filtered);
-    _persistMessages();
+    await _persistMessages();
   }
 
   /// Delete all messages for the active group and remove the persisted file.

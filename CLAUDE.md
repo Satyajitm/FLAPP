@@ -32,7 +32,7 @@ flutter test --coverage
 
 FluxonApp is a Flutter mobile app for **off-grid, BLE mesh networking**. It enables phone-to-phone group chat, real-time location sharing, and emergency SOS alerts — all peer-to-peer without internet. Adapted from the Bitchat protocol with Fluxonlink-specific additions.
 
-**Current status:** Phase 4 complete. 46 test files, all passing. Zero compile errors.
+**Current status:** Phase 4 complete + performance/correctness hardening (v3.1). 50 test files, 627 tests passing. Zero compile errors.
 
 ## Tech Stack
 
@@ -126,6 +126,7 @@ lib/
     providers/                      # Shared Riverpod providers
       group_providers.dart          #   groupManagerProvider + activeGroupProvider (reactive group state bridge)
       profile_providers.dart        #   userProfileManagerProvider + displayNameProvider
+      transport_providers.dart      #   transportProvider, myPeerIdProvider, transportConfigProvider (canonical home)
   shared/                           # Pure utilities
     hex_utils.dart                  #   Hex encode/decode
     logger.dart                     #   SecureLogger (no PII)
@@ -137,7 +138,7 @@ lib/
     chat/
       chat_screen.dart              #   Group chat UI (group menu, directional bubbles, display names)
       chat_controller.dart          #   StateNotifier<ChatState> (group broadcast only)
-      chat_providers.dart           #   Riverpod providers (incl. shared infra: transportProvider, myPeerIdProvider, display name)
+      chat_providers.dart           #   Chat feature providers; re-exports transport providers from core/providers/
       message_model.dart            #   ChatMessage data class (includes senderName field)
       data/
         chat_repository.dart        #   Abstract interface (includes sendPrivateMessage for protocol-level support)
@@ -193,7 +194,7 @@ Every external dependency is behind an abstract interface:
 - `PermissionService` ← `GeolocatorPermissionService`
 
 ### Riverpod DI
-Infrastructure providers (`transportProvider`, `myPeerIdProvider`) are defined in `chat_providers.dart` and `groupManagerProvider` in `core/providers/group_providers.dart` — all with `throw UnimplementedError()`. They **must** be overridden via `ProviderScope` overrides at the app root (`main.dart` does this).
+Infrastructure providers (`transportProvider`, `myPeerIdProvider`, `transportConfigProvider`) are defined in `core/providers/transport_providers.dart`. `groupManagerProvider` lives in `core/providers/group_providers.dart`. All throw `UnimplementedError()` and **must** be overridden via `ProviderScope` at the app root (`main.dart`). `chat_providers.dart` re-exports the transport providers for backward compatibility.
 
 Additional providers in Phase 4+:
 - `activeGroupProvider` — `StateProvider<FluxonGroup?>` that bridges imperative `GroupManager` mutations with Riverpod's reactive system
@@ -229,7 +230,7 @@ Wraps raw transport with multi-hop relay orchestration:
 - **MeshService** — Decides relay (flood control, TTL, topology), applies dedup, filters by topology
 - **RelayController** — Implements relay decisions (flood vs unicast, TTL checks)
 - **Deduplicator** — LRU + time-based dedup (key: source:timestamp:type)
-- **TopologyTracker** — BFS routing graph, link-state propagation
+- **TopologyTracker** — BFS routing graph, link-state propagation; route results cached for 5 s (keyed by source:target:maxHops), invalidated on any topology mutation
 - **GossipSync** — Anti-entropy gap-filling for missed packets
 
 ### Cryptography (`lib/core/crypto/`)
@@ -257,8 +258,8 @@ Chat payload format:
 ### Services (`lib/core/services/`)
 - **ForegroundServiceManager** — Android background BLE relay (prevents process termination on background)
 - **NotificationSoundService** — Generates 200ms two-tone chime (A5 → C6) in WAV, plays on non-local incoming chat messages
-- **MessageStorageService** — Persists chat messages to per-group JSON files in app documents directory
-- **ReceiptService** — Tracks and broadcasts message delivery status (double-tick indicators like WhatsApp)
+- **MessageStorageService** — Persists chat messages to per-group JSON files in app documents directory; writes are debounced (5 s) and batch-flushed (every 10 saves) to minimise I/O; `dispose()` cancels timer and flushes pending writes
+- **ReceiptService** — Tracks and broadcasts message delivery status (double-tick indicators like WhatsApp); sends receipts as batched packets (up to 255 per packet) to reduce BLE traffic
 
 ## Startup Sequence (main.dart)
 
@@ -266,9 +267,7 @@ Chat payload format:
 2. `WidgetsFlutterBinding.ensureInitialized()`
 3. `ForegroundServiceManager.initialize()` — Configure Android foreground service
 4. `await initSodium()` — Initialize global `SodiumSumo` instance
-5. `IdentityManager.initialize()` — Generate/load persistent Curve25519 keypair, derive `PeerId`
-6. `GroupManager.initialize()` — Restore persisted group membership
-7. `UserProfileManager.initialize()` — Load/create persistent display name
+5. `Future.wait([IdentityManager.initialize(), GroupManager.initialize(), UserProfileManager.initialize()])` — Parallel init: generate/load Curve25519 keypair + restore groups + load display name (saves 300–500 ms cold start vs sequential)
 8. Select transport: `BleTransport` (Android/iOS) or `StubTransport` (desktop/test)
 9. Wrap with `MeshService` for multi-hop relay
 10. `ProviderScope` overrides: `transportProvider`, `myPeerIdProvider`, `groupManagerProvider`, `userProfileManagerProvider`, `displayNameProvider`
@@ -343,7 +342,7 @@ flutter test test/features/          # Controllers, repositories, screens
 flutter test test/core/deduplicator_test.dart  # Single file
 ```
 
-All 46 test files passing. Tests use `mocktail` for mocking with abstract interface-based dependency injection.
+All 50 test files passing, 627 tests total. Tests use `mocktail` for mocking with abstract interface-based dependency injection.
 
 ## Phase Completion Status
 
@@ -362,7 +361,6 @@ All 46 test files passing. Tests use `mocktail` for mocking with abstract interf
 - Fragment reassembly: For payloads exceeding BLE MTU (if real devices negotiate MTU < 256)
 - End-to-end field test: 3-device mesh, app backgrounded on middle device
 - Performance profiling: Battery drain, memory footprint, relay latency under load
-- Shared infra providers (`transportProvider`, `myPeerIdProvider`) still in `chat_providers.dart` — ideally move to `core/providers/`
 
 ## Key Files to Read First
 

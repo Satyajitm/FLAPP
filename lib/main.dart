@@ -11,12 +11,12 @@ import 'core/identity/identity_manager.dart';
 import 'core/identity/user_profile_manager.dart';
 import 'core/providers/group_providers.dart';
 import 'core/providers/profile_providers.dart';
+import 'core/providers/transport_providers.dart';
 import 'core/mesh/mesh_service.dart';
 import 'core/services/foreground_service_manager.dart';
 import 'core/transport/ble_transport.dart';
 import 'core/transport/stub_transport.dart';
 import 'core/transport/transport.dart';
-import 'features/chat/chat_providers.dart';
 
 Future<void> main() async {
   // Must be called before anything else for flutter_foreground_task v9.
@@ -31,17 +31,15 @@ Future<void> main() async {
   // Initialize sodium_libs before any crypto operations
   await initSodium();
 
-  // Initialize identity (loads or creates static key pair)
+  // Initialize identity, groups, and profile in parallel — none depends on another.
   final identityManager = IdentityManager();
-  await identityManager.initialize();
-
-  // Initialize group manager (restores persisted group if any)
   final groupManager = GroupManager();
-  await groupManager.initialize();
-
-  // Initialize user profile (loads or creates display name)
   final profileManager = UserProfileManager();
-  await profileManager.initialize();
+  await Future.wait([
+    identityManager.initialize(),
+    groupManager.initialize(),
+    profileManager.initialize(),
+  ]);
 
   // Derive peer ID from the identity's public key
   final myPeerId = identityManager.myPeerId;

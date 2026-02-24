@@ -62,6 +62,12 @@ class NoiseCipherState {
   int _nonce = 0;
   final bool useExtractedNonce;
 
+  /// Reusable 8-byte nonce buffer — avoids allocating a new Uint8List on
+  /// every encrypt/decrypt call (safe because Dart is single-threaded and
+  /// libsodium copies the nonce before returning).
+  final Uint8List _nonceBuffer = Uint8List(8);
+  late final ByteData _nonceBufferData = ByteData.sublistView(_nonceBuffer);
+
   // Sliding window replay protection
   int _highestReceivedNonce = 0;
   final Uint8List _replayWindow = Uint8List(replayWindowBytes);
@@ -86,14 +92,12 @@ class NoiseCipherState {
     final currentNonce = _nonce;
 
     // Build 8-byte nonce: big-endian counter (original ChaCha20-Poly1305)
-    final nonceData = Uint8List(8);
-    final byteData = ByteData.sublistView(nonceData);
-    byteData.setUint64(0, currentNonce, Endian.big);
+    _nonceBufferData.setUint64(0, currentNonce, Endian.big);
 
     final sodium = sodiumInstance;
     final ciphertext = sodium.crypto.aeadChaCha20Poly1305.encrypt(
       message: plaintext,
-      nonce: nonceData,
+      nonce: _nonceBuffer,
       key: _key!,
       additionalData: ad,
     );
@@ -139,14 +143,13 @@ class NoiseCipherState {
     }
 
     // Build 8-byte nonce: big-endian counter (original ChaCha20-Poly1305)
-    final nonceData = Uint8List(8);
-    ByteData.sublistView(nonceData).setUint64(0, decryptionNonce, Endian.big);
+    _nonceBufferData.setUint64(0, decryptionNonce, Endian.big);
 
     final sodium = sodiumInstance;
     try {
       final plaintext = sodium.crypto.aeadChaCha20Poly1305.decrypt(
         cipherText: actualCiphertext,
-        nonce: nonceData,
+        nonce: _nonceBuffer,
         key: _key!,
         additionalData: ad,
       );

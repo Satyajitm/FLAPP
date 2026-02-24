@@ -208,4 +208,144 @@ void main() {
       expect(loaded[0].text, equals('safe'));
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Debounce / batch write behaviour
+  // -------------------------------------------------------------------------
+
+  group('MessageStorageService — debounce & batch writes', () {
+    late Directory tempDir;
+    late TestableStorageService service;
+    const groupA = 'debounce-group-a';
+    const groupB = 'debounce-group-b';
+
+    setUp(() {
+      tempDir = Directory.systemTemp.createTempSync('fluxon_debounce_');
+      service = TestableStorageService(tempDir);
+    });
+
+    tearDown(() async {
+      await service.dispose();
+      if (tempDir.existsSync()) {
+        tempDir.deleteSync(recursive: true);
+      }
+    });
+
+    test('write is NOT immediately flushed to disk (debounced)', () async {
+      final file = await service.getFileForGroup(groupA);
+
+      // Kick off a save but do NOT await loadMessages (which would force flush).
+      service.saveMessages(groupA, [_makeMessage('pending')]);
+
+      // The file should not exist yet — the write is buffered.
+      expect(await file.exists(), isFalse);
+    });
+
+    test('flush() forces immediate write to disk', () async {
+      service.saveMessages(groupA, [_makeMessage('flushed')]);
+
+      await service.flush();
+
+      final file = await service.getFileForGroup(groupA);
+      expect(await file.exists(), isTrue);
+
+      final loaded = await service.loadMessages(groupA);
+      expect(loaded, hasLength(1));
+      expect(loaded[0].text, equals('flushed'));
+    });
+
+    test('loadMessages flushes pending write for THAT group before reading', () async {
+      // Save without awaiting so write stays pending.
+      service.saveMessages(groupA, [_makeMessage('queued')]);
+
+      // loadMessages must flush groupA before reading.
+      final loaded = await service.loadMessages(groupA);
+      expect(loaded, hasLength(1));
+      expect(loaded[0].text, equals('queued'));
+    });
+
+    test('loadMessages does NOT flush pending writes for OTHER group', () async {
+      service.saveMessages(groupB, [_makeMessage('other')]);
+
+      // Loading groupA should not flush groupB's pending write.
+      await service.loadMessages(groupA); // groupA has no pending write.
+
+      final fileB = await service.getFileForGroup(groupB);
+      // groupB write is still pending — file should not exist on disk yet.
+      expect(await fileB.exists(), isFalse);
+    });
+
+    test('10 saveMessages calls trigger an immediate batch flush', () async {
+      for (var i = 0; i < 10; i++) {
+        await service.saveMessages(groupA, [_makeMessage('msg-$i')]);
+      }
+
+      // After 10 saves the batch threshold is hit — disk should be written.
+      final file = await service.getFileForGroup(groupA);
+      expect(await file.exists(), isTrue);
+    });
+
+    test('pending write counter resets after a batch flush', () async {
+      // Trigger a batch flush (10 writes).
+      for (var i = 0; i < 10; i++) {
+        await service.saveMessages(groupA, [_makeMessage('msg-$i')]);
+      }
+      final file = await service.getFileForGroup(groupA);
+      expect(await file.exists(), isTrue);
+
+      // Now issue fewer writes — they should be debounced again.
+      final fileSpy = file;
+      await fileSpy.delete(); // Remove so we can detect new write.
+
+      service.saveMessages(groupA, [_makeMessage('after-reset')]);
+      // Only 1 save since last flush — should NOT be on disk yet.
+      expect(await fileSpy.exists(), isFalse);
+    });
+
+    test('dispose cancels timer and flushes pending writes', () async {
+      service.saveMessages(groupA, [_makeMessage('on-dispose')]);
+
+      // Calling dispose should flush before returning.
+      await service.dispose();
+
+      final file = await service.getFileForGroup(groupA);
+      expect(await file.exists(), isTrue);
+
+      // Verify the content.
+      final contents = await file.readAsString();
+      expect(contents, contains('on-dispose'));
+    });
+
+    test('deleteAllMessages discards a pending write for that group', () async {
+      service.saveMessages(groupA, [_makeMessage('will-be-discarded')]);
+
+      // Delete before the debounce fires.
+      await service.deleteAllMessages(groupA);
+      await service.flush(); // Flush other pending writes (none in this test).
+
+      final file = await service.getFileForGroup(groupA);
+      // Write was discarded — file should not exist.
+      expect(await file.exists(), isFalse);
+    });
+
+    test('multiple groups batch independently — last-write-wins per group', () async {
+      // Write groupA twice with different content — only the latest should
+      // end up on disk after flush.
+      service.saveMessages(groupA, [_makeMessage('first-version')]);
+      service.saveMessages(groupA, [_makeMessage('second-version')]);
+
+      await service.flush();
+
+      final loaded = await service.loadMessages(groupA);
+      expect(loaded, hasLength(1));
+      expect(loaded[0].text, equals('second-version'));
+    });
+
+    test('flush on empty pending writes is a no-op', () async {
+      // Should not throw or create any files.
+      await service.flush();
+      final files = tempDir.listSync();
+      expect(files, isEmpty);
+    });
+  });
 }

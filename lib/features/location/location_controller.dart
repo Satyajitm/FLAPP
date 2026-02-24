@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/identity/peer_id.dart';
 import '../../core/transport/transport_config.dart';
+import '../../shared/geo_math.dart';
 import 'data/location_repository.dart';
 import 'location_model.dart';
 
@@ -42,6 +43,12 @@ class LocationController extends StateNotifier<LocationState> {
 
   Timer? _broadcastTimer;
   StreamSubscription? _locationSub;
+
+  /// Last successfully broadcast location (used for movement-change throttle).
+  LocationUpdate? _lastBroadcastLocation;
+
+  /// Minimum distance in metres that must change before we re-broadcast.
+  static const _minBroadcastDistanceMeters = 5.0;
 
   LocationController({
     required LocationRepository repository,
@@ -87,6 +94,24 @@ class LocationController extends StateNotifier<LocationState> {
   Future<void> _broadcastCurrentLocation() async {
     try {
       final myUpdate = await _repository.getCurrentLocation(_myPeerId);
+
+      // Always update local display, but skip the network broadcast if the
+      // device hasn't moved at least 5 metres since the last broadcast.
+      final last = _lastBroadcastLocation;
+      if (last != null) {
+        final distance = GeoMath.haversineDistance(
+          lat1: last.latitude,
+          lon1: last.longitude,
+          lat2: myUpdate.latitude,
+          lon2: myUpdate.longitude,
+        );
+        if (distance < _minBroadcastDistanceMeters) {
+          state = state.copyWith(myLocation: myUpdate);
+          return;
+        }
+      }
+
+      _lastBroadcastLocation = myUpdate;
       state = state.copyWith(myLocation: myUpdate);
       await _repository.broadcastLocation(myUpdate, _myPeerId);
     } catch (_) {

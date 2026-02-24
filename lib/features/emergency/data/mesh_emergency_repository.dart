@@ -7,6 +7,7 @@ import '../../../core/protocol/message_types.dart';
 import '../../../core/protocol/packet.dart';
 import '../../../core/transport/transport.dart';
 import '../../../core/transport/transport_config.dart';
+import '../../../shared/logger.dart';
 import '../emergency_controller.dart';
 import 'emergency_repository.dart';
 
@@ -38,7 +39,12 @@ class MeshEmergencyRepository implements EmergencyRepository {
   void _listenForAlerts() {
     _packetSub = _transport.onPacketReceived
         .where((p) => p.type == MessageType.emergencyAlert)
-        .listen(_handleIncomingAlert);
+        .listen(
+          _handleIncomingAlert,
+          onError: (Object e) => SecureLogger.warning(
+            'MeshEmergencyRepository: transport stream error: $e',
+          ),
+        );
   }
 
   void _handleIncomingAlert(FluxonPacket packet) {

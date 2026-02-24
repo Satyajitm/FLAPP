@@ -7,7 +7,18 @@ import '../crypto/sodium_instance.dart';
 ///
 /// Extracted from [GroupManager] to satisfy SRP: group lifecycle management
 /// is separate from cryptographic operations.
+/// Cached result of a single Argon2id derivation.
+class _DerivedGroup {
+  final Uint8List key;
+  final String groupId;
+  _DerivedGroup(this.key, this.groupId);
+}
+
 class GroupCipher {
+  /// Cache of passphrase+salt → derived key+groupId to avoid running
+  /// the expensive Argon2id twice on create/join.
+  final Map<String, _DerivedGroup> _derivationCache = {};
+
   // RFC 4648 base32 alphabet (no padding character)
   static const _b32Chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
   static final _b32Values = () {
@@ -74,11 +85,13 @@ class GroupCipher {
     return sodium.randombytes.buf(sodium.crypto.pwhash.saltBytes);
   }
 
-  /// Derive a 32-byte group key from [passphrase] and a random [salt] using Argon2id.
-  ///
-  /// [salt] must be [sodium.crypto.pwhash.saltBytes] bytes. Use [generateSalt]
-  /// to create a fresh random salt for each new group.
-  Uint8List deriveGroupKey(String passphrase, Uint8List salt) {
+  /// Run Argon2id once and cache both the group key and group ID for the given
+  /// [passphrase]+[salt] pair. Subsequent calls with the same inputs are free.
+  _DerivedGroup _derive(String passphrase, Uint8List salt) {
+    final cacheKey = '$passphrase:${encodeSalt(salt)}';
+    final cached = _derivationCache[cacheKey];
+    if (cached != null) return cached;
+
     final sodium = sodiumInstance;
 
     // ignore: deprecated_member_use
@@ -86,32 +99,39 @@ class GroupCipher {
       outLen: 32,
       password: passphrase.toCharArray(),
       salt: salt,
-      // Fix: opsLimitModerate (was opsLimitInteractive) for stronger brute-force resistance.
+      // opsLimitModerate for stronger brute-force resistance.
       // ignore: deprecated_member_use
       opsLimit: sodium.crypto.pwhash.opsLimitModerate,
       // ignore: deprecated_member_use
       memLimit: sodium.crypto.pwhash.memLimitModerate,
     );
-    final bytes = key.extractBytes();
+    final keyBytes = key.extractBytes();
     key.dispose();
-    return bytes;
+
+    final input = Uint8List.fromList(
+      utf8.encode('fluxon-group-id:$passphrase:') + salt,
+    );
+    final hash = sodium.crypto.genericHash(message: input, outLen: 16);
+    final groupId = hash.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+
+    final result = _DerivedGroup(keyBytes, groupId);
+    _derivationCache[cacheKey] = result;
+    return result;
   }
+
+  /// Derive a 32-byte group key from [passphrase] and [salt] using Argon2id.
+  ///
+  /// The result is cached — calling both [deriveGroupKey] and [generateGroupId]
+  /// with the same inputs runs Argon2id only once.
+  Uint8List deriveGroupKey(String passphrase, Uint8List salt) =>
+      _derive(passphrase, salt).key;
 
   /// Generate a deterministic group ID from [passphrase] AND [salt].
   ///
   /// Including the salt ensures that two groups with the same passphrase but
-  /// different salts get different IDs (fixes ID collision bug).
-  String generateGroupId(String passphrase, Uint8List salt) {
-    final sodium = sodiumInstance;
-    final input = Uint8List.fromList(
-      utf8.encode('fluxon-group-id:$passphrase:') + salt,
-    );
-    final hash = sodium.crypto.genericHash(
-      message: input,
-      outLen: 16,
-    );
-    return hash.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-  }
+  /// different salts get different IDs.
+  String generateGroupId(String passphrase, Uint8List salt) =>
+      _derive(passphrase, salt).groupId;
 
   /// Encode [salt] bytes as an unpadded RFC 4648 base32 string.
   ///

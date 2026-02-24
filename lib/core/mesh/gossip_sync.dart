@@ -131,7 +131,7 @@ class GossipSyncConfig {
   const GossipSyncConfig({
     this.seenCapacity = 1000,
     this.maxMessageAgeSeconds = 900, // 15 minutes
-    this.maintenanceIntervalSeconds = 30,
+    this.maintenanceIntervalSeconds = 60,
     this.syncIntervalSeconds = 15,
   });
 }

@@ -163,6 +163,8 @@ class BleDeviceTerminalRepository implements DeviceTerminalRepository {
     _notifySub = null;
     _connectionStateSub?.cancel();
     _connectionStateSub = null;
+    _scanSub?.cancel();
+    _scanSub = null;
     _connectedDevice = null;
     _txCharacteristic = null;
   }

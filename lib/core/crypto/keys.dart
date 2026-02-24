@@ -3,6 +3,14 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'sodium_instance.dart';
 import 'signatures.dart';
 
+/// 256-entry lookup table: byte value → two-character lowercase hex string.
+/// Pre-computed once at startup; avoids calling toRadixString(16) per byte.
+final List<String> _hexTable = List.generate(
+  256,
+  (i) => i.toRadixString(16).padLeft(2, '0'),
+  growable: false,
+);
+
 /// Pure key generation logic — no storage dependencies (ISP).
 class KeyGenerator {
   /// Generate a new Curve25519 static key pair.
@@ -30,7 +38,9 @@ class KeyGenerator {
   }
 
   static String bytesToHex(Uint8List bytes) {
-    return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    final buf = StringBuffer();
+    for (final b in bytes) { buf.write(_hexTable[b]); }
+    return buf.toString();
   }
 
   static Uint8List hexToBytes(String hex) {

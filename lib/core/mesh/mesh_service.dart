@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:typed_data';
 
 import '../../shared/hex_utils.dart';
@@ -46,7 +47,9 @@ class MeshService implements Transport {
   List<PeerConnection> _currentPeers = [];
 
   /// Ed25519 signing public keys cached from peer connections, keyed by peer hex ID.
-  final Map<String, Uint8List> _peerSigningKeys = {};
+  /// LRU-ordered (LinkedHashMap insertion order): oldest entry is evicted when limit exceeded.
+  final LinkedHashMap<String, Uint8List> _peerSigningKeys = LinkedHashMap();
+  static const _maxPeerSigningKeys = 500;
 
   static const _cat = 'Mesh';
 
@@ -134,9 +137,10 @@ class MeshService implements Transport {
     _peersSub = _rawTransport.connectedPeers.listen(_onPeersChanged);
     _gossipSync.start();
 
-    // Periodic topology announce (every 15 seconds).
+    // Periodic topology announce (every 45 seconds).
+    // Also triggered immediately on peer list change via _onPeersChanged.
     _announceTimer = Timer.periodic(
-      const Duration(seconds: 15),
+      const Duration(seconds: 45),
       (_) => _sendTopologyAnnounce(),
     );
 
@@ -301,10 +305,16 @@ class MeshService implements Transport {
 
     _currentPeers = peers;
 
-    // Cache Ed25519 signing public keys from peer connections
+    // Cache Ed25519 signing public keys from peer connections (LRU, capped at 500)
     for (final peer in peers) {
       if (peer.signingPublicKey != null) {
+        // Re-insert to mark as recently used
+        _peerSigningKeys.remove(peer.peerIdHex);
         _peerSigningKeys[peer.peerIdHex] = peer.signingPublicKey!;
+        // Evict oldest entry if over limit
+        while (_peerSigningKeys.length > _maxPeerSigningKeys) {
+          _peerSigningKeys.remove(_peerSigningKeys.keys.first);
+        }
       }
     }
 
@@ -314,10 +324,12 @@ class MeshService implements Transport {
       neighbors: peers.map((p) => p.peerId).toList(),
     );
 
-    // If new peers connected, announce ourselves.
+    // On any peer list change, send both a discovery and topology announce.
     final justConnected = newIds.difference(oldIds);
-    if (justConnected.isNotEmpty) {
+    final justDisconnected = oldIds.difference(newIds);
+    if (justConnected.isNotEmpty || justDisconnected.isNotEmpty) {
       _sendDiscoveryAnnounce();
+      _sendTopologyAnnounce();
     }
   }
 

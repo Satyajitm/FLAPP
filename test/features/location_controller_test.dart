@@ -197,5 +197,109 @@ void main() {
       expect(controller.state.myLocation, isNull);
       expect(repository.broadcastedLocations, isEmpty);
     });
+
+    // -------------------------------------------------------------------------
+    // Position-change throttle tests
+    // -------------------------------------------------------------------------
+
+    group('5m position-change throttle', () {
+      test('first broadcast is always sent (no prior location)', () async {
+        repository.fakeCurrentLocation = LocationUpdate(
+          peerId: myPeerId,
+          latitude: 37.7749,
+          longitude: -122.4194,
+          accuracy: 5.0,
+        );
+
+        await controller.startBroadcasting();
+
+        // First broadcast must always go through regardless of throttle
+        expect(repository.broadcastedLocations, hasLength(1));
+      });
+
+      test('broadcast skipped when moved less than 5m', () async {
+        // Set initial position and broadcast
+        repository.fakeCurrentLocation = LocationUpdate(
+          peerId: myPeerId,
+          latitude: 37.7749,
+          longitude: -122.4194,
+          accuracy: 5.0,
+        );
+        await controller.startBroadcasting();
+        expect(repository.broadcastedLocations, hasLength(1));
+
+        // Move only ~2m north (≈0.000018 degrees latitude)
+        repository.fakeCurrentLocation = LocationUpdate(
+          peerId: myPeerId,
+          latitude: 37.7749180, // ~2m north
+          longitude: -122.4194,
+          accuracy: 5.0,
+        );
+
+        // Manually trigger another broadcast cycle
+        await controller.startBroadcasting();
+
+        // Should NOT broadcast (< 5m movement)
+        // Note: startBroadcasting calls _broadcastCurrentLocation once at start.
+        // The second call increments to 2, but the second location is < 5m away.
+        expect(repository.broadcastedLocations, hasLength(1));
+      });
+
+      test('broadcast sent when moved 5m or more', () async {
+        // Set initial position and broadcast
+        repository.fakeCurrentLocation = LocationUpdate(
+          peerId: myPeerId,
+          latitude: 37.7749,
+          longitude: -122.4194,
+          accuracy: 5.0,
+        );
+        await controller.startBroadcasting();
+        expect(repository.broadcastedLocations, hasLength(1));
+
+        // Move ~10m north (≈0.0001 degrees ≈ 11m)
+        repository.fakeCurrentLocation = LocationUpdate(
+          peerId: myPeerId,
+          latitude: 37.7750,
+          longitude: -122.4194,
+          accuracy: 5.0,
+        );
+
+        // Trigger another broadcast cycle by calling directly
+        controller.stopBroadcasting();
+        await controller.startBroadcasting();
+
+        // Second broadcast should have been sent (>= 5m moved)
+        expect(repository.broadcastedLocations, hasLength(2));
+      });
+
+      test('myLocation state is updated even when broadcast is skipped', () async {
+        // First broadcast
+        repository.fakeCurrentLocation = LocationUpdate(
+          peerId: myPeerId,
+          latitude: 37.7749,
+          longitude: -122.4194,
+          accuracy: 5.0,
+        );
+        await controller.startBroadcasting();
+
+        // Tiny movement — broadcast should be skipped
+        const newLat = 37.77491; // < 2m
+        repository.fakeCurrentLocation = LocationUpdate(
+          peerId: myPeerId,
+          latitude: newLat,
+          longitude: -122.4194,
+          accuracy: 5.0,
+        );
+
+        // Stop and restart triggers another _broadcastCurrentLocation
+        controller.stopBroadcasting();
+        await controller.startBroadcasting();
+
+        // myLocation state should still be updated for the UI
+        expect(controller.state.myLocation?.latitude, closeTo(newLat, 0.000001));
+        // But no new BLE packet was sent
+        expect(repository.broadcastedLocations, hasLength(1));
+      });
+    });
   });
 }

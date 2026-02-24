@@ -268,5 +268,137 @@ void main() {
       final route = tracker.computeRoute(start: peerId(1), goal: Uint8List(0));
       expect(route, isNull);
     });
+
+    // -----------------------------------------------------------------------
+    // Route cache
+    // -----------------------------------------------------------------------
+
+    group('route cache', () {
+      test('second call returns cached result without re-running BFS', () {
+        final a = peerId(1);
+        final b = peerId(2);
+        final c = peerId(3);
+
+        tracker.updateNeighbors(source: a, neighbors: [b]);
+        tracker.updateNeighbors(source: b, neighbors: [a, c]);
+        tracker.updateNeighbors(source: c, neighbors: [b]);
+
+        final route1 = tracker.computeRoute(start: a, goal: c);
+        final route2 = tracker.computeRoute(start: a, goal: c);
+
+        expect(route1, isNotNull);
+        expect(route2, isNotNull);
+        // Same result object is returned from cache.
+        expect(identical(route1, route2), isTrue);
+      });
+
+      test('cache is invalidated after updateNeighbors', () {
+        final a = peerId(1);
+        final b = peerId(2);
+        final c = peerId(3);
+
+        tracker.updateNeighbors(source: a, neighbors: [b]);
+        tracker.updateNeighbors(source: b, neighbors: [a, c]);
+        tracker.updateNeighbors(source: c, neighbors: [b]);
+
+        final routeBefore = tracker.computeRoute(start: a, goal: c);
+        expect(routeBefore, isNotNull);
+
+        // Remove B as a common neighbour — route should now be null.
+        tracker.updateNeighbors(source: b, neighbors: []);
+
+        final routeAfter = tracker.computeRoute(start: a, goal: c);
+        expect(routeAfter, isNull);
+      });
+
+      test('cache is invalidated after removePeer', () {
+        final a = peerId(1);
+        final b = peerId(2);
+        final c = peerId(3);
+
+        tracker.updateNeighbors(source: a, neighbors: [b]);
+        tracker.updateNeighbors(source: b, neighbors: [a, c]);
+        tracker.updateNeighbors(source: c, neighbors: [b]);
+
+        final routeBefore = tracker.computeRoute(start: a, goal: c);
+        expect(routeBefore, isNotNull);
+
+        tracker.removePeer(b);
+
+        final routeAfter = tracker.computeRoute(start: a, goal: c);
+        expect(routeAfter, isNull);
+      });
+
+      test('cache is cleared by reset', () {
+        final a = peerId(1);
+        final b = peerId(2);
+
+        tracker.updateNeighbors(source: a, neighbors: [b]);
+        tracker.updateNeighbors(source: b, neighbors: [a]);
+
+        final routeBefore = tracker.computeRoute(start: a, goal: b);
+        expect(routeBefore, isNotNull);
+
+        tracker.reset();
+
+        // After reset, topology is gone so BFS should find no route.
+        final routeAfter = tracker.computeRoute(start: a, goal: b);
+        expect(routeAfter, isNull);
+      });
+
+      test('cache is cleared after prune removes a node on the route', () async {
+        final a = peerId(1);
+        final b = peerId(2);
+        final c = peerId(3);
+
+        tracker.updateNeighbors(source: a, neighbors: [b]);
+        tracker.updateNeighbors(source: b, neighbors: [a, c]);
+        tracker.updateNeighbors(source: c, neighbors: [b]);
+
+        final routeBefore = tracker.computeRoute(start: a, goal: c);
+        expect(routeBefore, isNotNull); // Caches the route.
+
+        // Wait so all nodes become stale, then prune.
+        await Future.delayed(const Duration(milliseconds: 10));
+        tracker.prune(Duration.zero);
+
+        // All nodes pruned — BFS finds nothing and stale cache is not returned.
+        final routeAfter = tracker.computeRoute(start: a, goal: c);
+        expect(routeAfter, isNull);
+      });
+
+      test('cached null result is still returned within TTL', () {
+        final a = peerId(1);
+        final b = peerId(2);
+        // No topology loaded — route is always null.
+
+        final route1 = tracker.computeRoute(start: a, goal: b);
+        expect(route1, isNull);
+
+        // Without any topology change the second call should also be null
+        // (served from cache — same null result).
+        final route2 = tracker.computeRoute(start: a, goal: b);
+        expect(route2, isNull);
+      });
+
+      test('different maxHops values use independent cache slots', () {
+        final a = peerId(1);
+        final b = peerId(2);
+        final c = peerId(3);
+        final d = peerId(4);
+
+        tracker.updateNeighbors(source: a, neighbors: [b]);
+        tracker.updateNeighbors(source: b, neighbors: [a, c]);
+        tracker.updateNeighbors(source: c, neighbors: [b, d]);
+        tracker.updateNeighbors(source: d, neighbors: [c]);
+
+        final restricted = tracker.computeRoute(start: a, goal: d, maxHops: 1);
+        expect(restricted, isNull); // Cached as null for key "a:d:1".
+
+        final full = tracker.computeRoute(start: a, goal: d, maxHops: 3);
+        expect(full, isNotNull); // Different slot — BFS runs independently.
+        expect(full!.length, equals(2));
+      });
+    });
   });
 }

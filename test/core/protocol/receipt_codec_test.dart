@@ -105,4 +105,119 @@ void main() {
       expect(read[0], equals(0x02));
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Batch receipt codec tests
+  // ---------------------------------------------------------------------------
+
+  group('Batch receipt codec — encodeBatchReceiptPayload / decodeBatchReceiptPayload', () {
+    ReceiptPayload _makeReceipt(int senderFill, int timestamp, int type) =>
+        ReceiptPayload(
+          receiptType: type,
+          originalTimestamp: timestamp,
+          originalSenderId: Uint8List(32)..fillRange(0, 32, senderFill),
+        );
+
+    test('round-trip with a single receipt', () {
+      final receipt = _makeReceipt(0xAA, 1708396800000, ReceiptType.read);
+      final encoded = BinaryProtocol.encodeBatchReceiptPayload([receipt]);
+
+      expect(encoded[0], equals(0xFF)); // sentinel
+      expect(encoded[1], equals(1));    // count
+
+      final decoded = BinaryProtocol.decodeBatchReceiptPayload(encoded);
+      expect(decoded, isNotNull);
+      expect(decoded, hasLength(1));
+      expect(decoded![0].receiptType, equals(ReceiptType.read));
+      expect(decoded[0].originalTimestamp, equals(1708396800000));
+      expect(decoded[0].originalSenderId, equals(Uint8List(32)..fillRange(0, 32, 0xAA)));
+    });
+
+    test('round-trip with three receipts preserves order and values', () {
+      final receipts = [
+        _makeReceipt(0x01, 1000, ReceiptType.delivered),
+        _makeReceipt(0x02, 2000, ReceiptType.read),
+        _makeReceipt(0x03, 3000, ReceiptType.delivered),
+      ];
+      final encoded = BinaryProtocol.encodeBatchReceiptPayload(receipts);
+      expect(encoded[1], equals(3)); // count
+
+      final decoded = BinaryProtocol.decodeBatchReceiptPayload(encoded);
+      expect(decoded, isNotNull);
+      expect(decoded, hasLength(3));
+      for (var i = 0; i < 3; i++) {
+        expect(decoded![i].originalTimestamp, equals(receipts[i].originalTimestamp));
+        expect(decoded[i].receiptType, equals(receipts[i].receiptType));
+        expect(decoded[i].originalSenderId, equals(receipts[i].originalSenderId));
+      }
+    });
+
+    test('empty list encodes and decodes to empty list', () {
+      final encoded = BinaryProtocol.encodeBatchReceiptPayload([]);
+      expect(encoded[0], equals(0xFF));
+      expect(encoded[1], equals(0));
+      expect(encoded.length, equals(2));
+
+      final decoded = BinaryProtocol.decodeBatchReceiptPayload(encoded);
+      expect(decoded, isNotNull);
+      expect(decoded, isEmpty);
+    });
+
+    test('encoded size is exactly 2 + count * 41 bytes', () {
+      for (var n = 0; n <= 5; n++) {
+        final receipts = List.generate(
+          n,
+          (i) => _makeReceipt(i, i * 1000, ReceiptType.read),
+        );
+        final encoded = BinaryProtocol.encodeBatchReceiptPayload(receipts);
+        expect(encoded.length, equals(2 + n * 41),
+            reason: 'size should be 2 + $n * 41 for $n receipts');
+      }
+    });
+
+    test('list clamped at 255 — excess receipts are silently dropped', () {
+      final receipts = List.generate(
+        300,
+        (i) => _makeReceipt(i & 0xFF, i * 1000, ReceiptType.read),
+      );
+      final encoded = BinaryProtocol.encodeBatchReceiptPayload(receipts);
+      expect(encoded[1], equals(255)); // count byte = 255, not 300
+
+      final decoded = BinaryProtocol.decodeBatchReceiptPayload(encoded);
+      expect(decoded, hasLength(255));
+    });
+
+    test('decodeBatchReceiptPayload returns null for non-batch payload (no sentinel)', () {
+      // A regular single receipt payload starts with ReceiptType.delivered (0x01)
+      final singlePayload = BinaryProtocol.encodeReceiptPayload(
+        receiptType: ReceiptType.delivered,
+        originalTimestamp: 1000,
+        originalSenderId: Uint8List(32),
+      );
+      expect(BinaryProtocol.decodeBatchReceiptPayload(singlePayload), isNull);
+    });
+
+    test('decodeBatchReceiptPayload returns null for empty data', () {
+      expect(BinaryProtocol.decodeBatchReceiptPayload(Uint8List(0)), isNull);
+    });
+
+    test('decodeBatchReceiptPayload returns null for truncated batch', () {
+      // 2-byte header saying count=3 but only 1 entry present
+      final truncated = Uint8List(2 + 41); // count=3 but only 1 entry worth
+      truncated[0] = 0xFF;
+      truncated[1] = 3;
+      expect(BinaryProtocol.decodeBatchReceiptPayload(truncated), isNull);
+    });
+
+    test('batch payload first byte (0xFF) is not confused with a receipt type', () {
+      // Ensure decodeReceiptPayload does not crash on batch payload
+      final batchPayload = BinaryProtocol.encodeBatchReceiptPayload([
+        _makeReceipt(0xAA, 1000, ReceiptType.read),
+      ]);
+      // decodeReceiptPayload should still parse (it's > 41 bytes), but
+      // the receiptType will be 0xFF which is neither delivered nor read.
+      // The important thing is it does not throw.
+      expect(() => BinaryProtocol.decodeReceiptPayload(batchPayload), returnsNormally);
+    });
+  });
 }

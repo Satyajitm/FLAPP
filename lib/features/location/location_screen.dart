@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_map_cache/flutter_map_cache.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -26,7 +27,8 @@ class _LocationScreenState extends ConsumerState<LocationScreen> {
   @override
   void initState() {
     super.initState();
-    _initTileCache();
+    // Defer I/O off the first frame so the map renders immediately.
+    SchedulerBinding.instance.addPostFrameCallback((_) => _initTileCache());
   }
 
   Future<void> _initTileCache() async {
@@ -52,8 +54,9 @@ class _LocationScreenState extends ConsumerState<LocationScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final locationState = ref.watch(locationControllerProvider);
-    final isBroadcasting = locationState.isBroadcasting;
+    final isBroadcasting = ref.watch(
+      locationControllerProvider.select((s) => s.isBroadcasting),
+    );
 
     return Scaffold(
       appBar: AppBar(
@@ -99,11 +102,15 @@ class _LocationScreenState extends ConsumerState<LocationScreen> {
   }
 
   List<Marker> _buildMarkers() {
-    final locationState = ref.watch(locationControllerProvider);
+    // Use .select() so marker rebuilds are triggered only when location data
+    // changes, not on isBroadcasting or other unrelated state fields.
+    final myLoc = ref.watch(
+      locationControllerProvider.select((s) => s.myLocation),
+    );
+    final memberLocations = ref.watch(
+      locationControllerProvider.select((s) => s.memberLocations),
+    );
     final markers = <Marker>[];
-
-    // My location pin (green)
-    final myLoc = locationState.myLocation;
     if (myLoc != null) {
       markers.add(Marker(
         point: LatLng(myLoc.latitude, myLoc.longitude),
@@ -118,7 +125,7 @@ class _LocationScreenState extends ConsumerState<LocationScreen> {
     }
 
     // Group members' pins (blue)
-    for (final loc in locationState.memberLocations.values) {
+    for (final loc in memberLocations.values) {
       markers.add(Marker(
         point: LatLng(loc.latitude, loc.longitude),
         width: 40,

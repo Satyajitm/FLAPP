@@ -477,6 +477,88 @@ void main() {
       expect(repository.readReceiptsSent, isEmpty);
     });
   });
+
+  group('ChatController — in-memory message cap', () {
+    late FakeChatRepository repository;
+    late ChatController controller;
+    final myPeerId = _makePeerId(0xAA);
+
+    setUp(() {
+      repository = FakeChatRepository();
+      controller = ChatController(
+        repository: repository,
+        myPeerId: myPeerId,
+        getDisplayName: () => 'TestUser',
+      );
+    });
+
+    tearDown(() {
+      controller.dispose();
+    });
+
+    test('incoming messages beyond 200 trim the oldest entries', () async {
+      // Simulate 201 incoming messages
+      for (var i = 0; i < 201; i++) {
+        repository.simulateIncoming(_makeRemoteMessage('msg$i'));
+      }
+      await Future.delayed(const Duration(milliseconds: 40));
+
+      // Must never exceed the 200 cap
+      expect(controller.state.messages.length, equals(200));
+      // The oldest message (msg0) should have been dropped
+      expect(
+        controller.state.messages.any((m) => m.text == 'msg0'),
+        isFalse,
+        reason: 'msg0 should have been evicted',
+      );
+      // The most recent message should still be present
+      expect(
+        controller.state.messages.last.text,
+        equals('msg200'),
+      );
+    });
+
+    test('exactly 200 messages are kept without trimming', () async {
+      for (var i = 0; i < 200; i++) {
+        repository.simulateIncoming(_makeRemoteMessage('msg$i'));
+      }
+      await Future.delayed(const Duration(milliseconds: 40));
+
+      expect(controller.state.messages.length, equals(200));
+      expect(controller.state.messages.first.text, equals('msg0'));
+      expect(controller.state.messages.last.text, equals('msg199'));
+    });
+
+    test('sendMessage also applies the 200-message cap', () async {
+      // Fill up to 200 via incoming
+      for (var i = 0; i < 200; i++) {
+        repository.simulateIncoming(_makeRemoteMessage('remote$i'));
+      }
+      await Future.delayed(const Duration(milliseconds: 40));
+
+      // Sending one more should trim the oldest
+      await controller.sendMessage('local');
+
+      expect(controller.state.messages.length, equals(200));
+      expect(
+        controller.state.messages.any((m) => m.text == 'remote0'),
+        isFalse,
+        reason: 'remote0 should have been evicted',
+      );
+      expect(controller.state.messages.last.text, equals('local'));
+    });
+
+    test('cap preserves correct chronological tail', () async {
+      for (var i = 0; i < 210; i++) {
+        repository.simulateIncoming(_makeRemoteMessage('msg$i'));
+      }
+      await Future.delayed(const Duration(milliseconds: 40));
+
+      // Should retain msg10 … msg209 (last 200)
+      expect(controller.state.messages.first.text, equals('msg10'));
+      expect(controller.state.messages.last.text, equals('msg209'));
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------

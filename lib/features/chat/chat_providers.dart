@@ -1,44 +1,17 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../core/identity/peer_id.dart';
 import '../../core/providers/group_providers.dart';
 import '../../core/providers/profile_providers.dart';
+import '../../core/providers/transport_providers.dart';
 import '../../core/services/message_storage_service.dart';
 import '../../core/services/receipt_service.dart';
-import '../../core/transport/transport.dart';
-import '../../core/transport/transport_config.dart';
 import 'data/chat_repository.dart';
 import 'data/mesh_chat_repository.dart';
 import 'chat_controller.dart';
 
-// ---------------------------------------------------------------------------
-// Core infrastructure providers
-// ---------------------------------------------------------------------------
-
-/// Provides the [Transport] instance (BLE or future Fluxo hardware).
-///
-/// Override this in main.dart or a test harness to supply the actual
-/// implementation.
-final transportProvider = Provider<Transport>((ref) {
-  throw UnimplementedError(
-    'transportProvider must be overridden with a concrete Transport '
-    'implementation before use.',
-  );
-});
-
-/// Provides the local device's [PeerId].
-///
-/// Override this after identity initialization in main.dart.
-final myPeerIdProvider = Provider<PeerId>((ref) {
-  throw UnimplementedError(
-    'myPeerIdProvider must be overridden with the device PeerId '
-    'after identity initialization.',
-  );
-});
-
-/// Provides the [TransportConfig].
-final transportConfigProvider = Provider<TransportConfig>((ref) {
-  return TransportConfig.defaultConfig;
-});
+// Re-export so existing imports of these providers from chat_providers.dart
+// continue to resolve without changes across other files.
+export '../../core/providers/transport_providers.dart'
+    show transportProvider, myPeerIdProvider, transportConfigProvider;
 
 // ---------------------------------------------------------------------------
 // Chat feature providers
@@ -77,7 +50,9 @@ final chatRepositoryProvider = Provider<ChatRepository>((ref) {
 
 /// Provides the [MessageStorageService] for local message persistence.
 final messageStorageServiceProvider = Provider<MessageStorageService>((ref) {
-  return MessageStorageService();
+  final service = MessageStorageService();
+  ref.onDispose(() => service.dispose());
+  return service;
 });
 
 /// Provides the [ChatController] StateNotifier.

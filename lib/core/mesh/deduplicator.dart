@@ -86,8 +86,8 @@ class MessageDeduplicator {
     }
     _head += removeCount;
 
-    // Compact when head exceeds half the list
-    if (_head > _entries.length ~/ 2) {
+    // Compact when head exceeds 25% of the list (smaller, more frequent GC batches)
+    if (_head > _entries.length ~/ 4) {
       _entries.removeRange(0, _head);
       _head = 0;
     }
@@ -98,8 +98,8 @@ class MessageDeduplicator {
       _lookup.remove(_entries[_head].id);
       _head++;
     }
-    // Compact when head exceeds half the list
-    if (_head > 0 && _head > _entries.length ~/ 2) {
+    // Compact when head exceeds 25% of the list (consistent with _trimIfNeeded)
+    if (_head > 0 && _head > _entries.length ~/ 4) {
       _entries.removeRange(0, _head);
       _head = 0;
     }

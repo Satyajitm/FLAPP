@@ -19,18 +19,33 @@ class EmergencyState {
   final List<EmergencyAlert> alerts;
   final bool isSending;
 
+  /// True when the last send attempt failed. UI should show a retry button.
+  final bool hasSendError;
+
+  /// Number of retry attempts made so far (0 = not yet retried).
+  final int retryCount;
+
   const EmergencyState({
     this.alerts = const [],
     this.isSending = false,
+    this.hasSendError = false,
+    this.retryCount = 0,
   });
+
+  /// True if a retry is possible (failed and under the max retry limit).
+  bool get canRetry => hasSendError && retryCount < EmergencyController.maxRetries;
 
   EmergencyState copyWith({
     List<EmergencyAlert>? alerts,
     bool? isSending,
+    bool? hasSendError,
+    int? retryCount,
   }) {
     return EmergencyState(
       alerts: alerts ?? this.alerts,
       isSending: isSending ?? this.isSending,
+      hasSendError: hasSendError ?? this.hasSendError,
+      retryCount: retryCount ?? this.retryCount,
     );
   }
 }
@@ -56,6 +71,21 @@ class EmergencyAlert {
   }) : timestamp = timestamp ?? DateTime.now();
 }
 
+/// Stores the parameters for a failed alert so it can be retried.
+class _PendingAlert {
+  final EmergencyAlertType type;
+  final double latitude;
+  final double longitude;
+  final String message;
+
+  const _PendingAlert({
+    required this.type,
+    required this.latitude,
+    required this.longitude,
+    required this.message,
+  });
+}
+
 /// Emergency alert broadcast logic.
 ///
 /// Depends on [EmergencyRepository] (DIP) instead of Transport/BinaryProtocol
@@ -64,6 +94,12 @@ class EmergencyController extends StateNotifier<EmergencyState> {
   final EmergencyRepository _repository;
   final PeerId _myPeerId;
   StreamSubscription? _alertSub;
+
+  /// Maximum number of manual retries allowed after the initial send attempt.
+  static const maxRetries = 5;
+
+  /// The last failed alert, retained for retry.
+  _PendingAlert? _pendingAlert;
 
   EmergencyController({
     required EmergencyRepository repository,
@@ -81,37 +117,82 @@ class EmergencyController extends StateNotifier<EmergencyState> {
   }
 
   /// Send an SOS emergency alert.
+  ///
+  /// On failure, sets [EmergencyState.hasSendError] = true so the UI can
+  /// show a retry button. Call [retryAlert] to retry with exponential backoff.
   Future<void> sendAlert({
     required EmergencyAlertType type,
     required double latitude,
     required double longitude,
     String message = '',
   }) async {
-    state = state.copyWith(isSending: true);
+    _pendingAlert = _PendingAlert(
+      type: type,
+      latitude: latitude,
+      longitude: longitude,
+      message: message,
+    );
+    state = state.copyWith(isSending: true, hasSendError: false, retryCount: 0);
+    await _doSend();
+  }
+
+  /// Retry the last failed alert (called by the UI retry button).
+  ///
+  /// Each call applies an exponential backoff delay: 500 ms × 2^(attempt-1).
+  /// Has no effect if there is nothing pending or all retries are exhausted.
+  Future<void> retryAlert() async {
+    if (_pendingAlert == null || state.retryCount >= maxRetries) return;
+
+    final attempt = state.retryCount + 1;
+    state = state.copyWith(
+      isSending: true,
+      hasSendError: false,
+      retryCount: attempt,
+    );
+
+    // Exponential backoff: 500 ms, 1 s, 2 s, 4 s, 8 s
+    final delay = Duration(milliseconds: 500 * (1 << (attempt - 1)));
+    await Future.delayed(delay);
+
+    // Guard against disposal during the backoff delay.
+    if (!mounted) return;
+
+    await _doSend();
+  }
+
+  Future<void> _doSend() async {
+    final alert = _pendingAlert;
+    if (alert == null) return;
 
     try {
       await _repository.sendAlert(
-        type: type,
-        latitude: latitude,
-        longitude: longitude,
-        message: message,
+        type: alert.type,
+        latitude: alert.latitude,
+        longitude: alert.longitude,
+        message: alert.message,
       );
 
-      final alert = EmergencyAlert(
+      if (!mounted) return;
+
+      final emergencyAlert = EmergencyAlert(
         sender: _myPeerId,
-        type: type,
-        latitude: latitude,
-        longitude: longitude,
-        message: message,
+        type: alert.type,
+        latitude: alert.latitude,
+        longitude: alert.longitude,
+        message: alert.message,
         isLocal: true,
       );
 
+      _pendingAlert = null;
       state = state.copyWith(
-        alerts: [...state.alerts, alert],
+        alerts: [...state.alerts, emergencyAlert],
         isSending: false,
+        hasSendError: false,
+        retryCount: 0,
       );
     } catch (_) {
-      state = state.copyWith(isSending: false);
+      if (!mounted) return;
+      state = state.copyWith(isSending: false, hasSendError: true);
     }
   }
 

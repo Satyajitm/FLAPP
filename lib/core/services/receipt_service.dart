@@ -84,14 +84,36 @@ class ReceiptService {
 
   void _flushReadReceipts() {
     _readBatchTimer = null;
-    for (final ref in _pendingReadReceipts.values) {
-      _sendReceipt(
-        receiptType: ReceiptType.read,
-        originalTimestamp: ref.timestamp,
-        originalSenderId: ref.senderId,
-      );
-    }
+    if (_pendingReadReceipts.isEmpty) return;
+
+    final receipts = _pendingReadReceipts.values
+        .map((ref) => ReceiptPayload(
+              receiptType: ReceiptType.read,
+              originalTimestamp: ref.timestamp,
+              originalSenderId: ref.senderId,
+            ))
+        .toList();
     _pendingReadReceipts.clear();
+
+    // Send all pending read receipts as a single BLE packet.
+    _sendBatchReceipts(receipts);
+  }
+
+  void _sendBatchReceipts(List<ReceiptPayload> receipts) {
+    var payload = BinaryProtocol.encodeBatchReceiptPayload(receipts);
+
+    if (_groupManager.isInGroup) {
+      final encrypted = _groupManager.encryptForGroup(payload);
+      if (encrypted != null) payload = encrypted;
+    }
+
+    final packet = BinaryProtocol.buildPacket(
+      type: MessageType.ack,
+      sourceId: _myPeerId.bytes,
+      payload: payload,
+    );
+
+    _transport.broadcastPacket(packet);
   }
 
   Future<void> _sendReceipt({
@@ -131,14 +153,23 @@ class ReceiptService {
       payload = decrypted;
     }
 
-    final receipt = BinaryProtocol.decodeReceiptPayload(payload);
-    if (receipt == null) return;
+    // Try batch format first, then fall back to single-receipt format.
+    final batch = BinaryProtocol.decodeBatchReceiptPayload(payload);
+    if (batch != null) {
+      for (final receipt in batch) {
+        _emitReceiptEvent(receipt, fromPeer);
+      }
+      return;
+    }
 
-    // Reconstruct the original message's packetId
+    final single = BinaryProtocol.decodeReceiptPayload(payload);
+    if (single != null) _emitReceiptEvent(single, fromPeer);
+  }
+
+  void _emitReceiptEvent(ReceiptPayload receipt, PeerId fromPeer) {
     final srcHex = HexUtils.encode(receipt.originalSenderId);
     final originalMessageId =
         '$srcHex:${receipt.originalTimestamp}:${MessageType.chat.value}';
-
     _receiptController.add(ReceiptEvent(
       originalMessageId: originalMessageId,
       receiptType: receipt.receiptType,

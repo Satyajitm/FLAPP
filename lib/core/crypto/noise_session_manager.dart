@@ -1,7 +1,31 @@
+import 'dart:collection';
 import 'dart:typed_data';
 import '../../shared/logger.dart';
 import 'noise_protocol.dart';
 import 'noise_session.dart';
+
+/// Per-peer state consolidated from what was previously four separate maps.
+class _PeerState {
+  NoiseHandshakeState? handshake;
+  NoiseSession? session;
+  Uint8List? signingKey;
+
+  /// Remote static public key — stored after handshake completes so it remains
+  /// accessible via [NoiseSessionManager.getRemotePubKey] after [handshake] is nulled.
+  Uint8List? remoteStaticPublicKey;
+
+  int lastHandshakeTime;
+  int handshakeAttempts;
+
+  _PeerState({
+    this.handshake,
+    this.session,
+    this.signingKey,
+    this.remoteStaticPublicKey,
+    this.lastHandshakeTime = 0,
+    this.handshakeAttempts = 0,
+  });
+}
 
 /// Manages Noise XX handshake state machines and post-handshake sessions.
 ///
@@ -13,20 +37,13 @@ class NoiseSessionManager {
   final Uint8List _myStaticPubKey;
   final Uint8List _localSigningPublicKey;
 
-  /// Pending handshakes in progress, keyed by BLE device ID.
-  final Map<String, NoiseHandshakeState> _pendingHandshakes = {};
+  /// Per-peer state, keyed by BLE device ID.
+  /// LRU-ordered (LinkedHashMap insertion order): oldest entry evicted at [_maxPeers].
+  final LinkedHashMap<String, _PeerState> _peers = LinkedHashMap();
 
-  /// Completed sessions, keyed by BLE device ID.
-  final Map<String, NoiseSession> _sessions = {};
-
-  /// Remote peers' Ed25519 signing public keys, keyed by BLE device ID.
-  final Map<String, Uint8List> _peerSigningKeys = {};
-
-  /// Timestamp (ms since epoch) of the last handshake attempt per device.
-  final Map<String, int> _lastHandshakeTime = {};
-
-  /// Handshake attempt count within the current rate-limit window per device.
-  final Map<String, int> _handshakeAttempts = {};
+  /// Maximum number of peer entries to keep in memory.
+  /// Protects against unbounded map growth from device-ID-cycling attacks.
+  static const _maxPeers = 500;
 
   NoiseSessionManager({
     required Uint8List myStaticPrivKey,
@@ -35,6 +52,21 @@ class NoiseSessionManager {
   })  : _myStaticPrivKey = myStaticPrivKey,
         _myStaticPubKey = myStaticPubKey,
         _localSigningPublicKey = localSigningPublicKey;
+
+  /// Get or create state for a device. Marks the entry as recently used (LRU).
+  _PeerState _stateFor(String deviceId) {
+    // Re-insert to mark as recently used.
+    final existing = _peers.remove(deviceId);
+    final state = existing ?? _PeerState();
+    _peers[deviceId] = state;
+
+    // Evict oldest entry if over the limit.
+    while (_peers.length > _maxPeers) {
+      _peers.remove(_peers.keys.first);
+    }
+
+    return state;
+  }
 
   /// Start a Noise XX handshake as the initiator (central role).
   ///
@@ -49,7 +81,7 @@ class NoiseSessionManager {
     );
 
     final message1 = state.writeMessage(); // -> e
-    _pendingHandshakes[deviceId] = state;
+    _stateFor(deviceId).handshake = state;
 
     SecureLogger.debug('[NoiseSessionManager] Started handshake as initiator for $deviceId');
     return message1;
@@ -72,17 +104,18 @@ class NoiseSessionManager {
   ) {
     // Rate-limit incoming handshake attempts to prevent replay / DoS attacks.
     final now = DateTime.now().millisecondsSinceEpoch;
-    final lastTime = _lastHandshakeTime[deviceId] ?? 0;
-    if (now - lastTime < 60000) {
-      _handshakeAttempts[deviceId] = (_handshakeAttempts[deviceId] ?? 0) + 1;
-      if ((_handshakeAttempts[deviceId] ?? 0) > 5) return (response: null, remotePubKey: null, remoteSigningPublicKey: null); // Rate limit
+    final peer = _stateFor(deviceId);
+
+    if (now - peer.lastHandshakeTime < 60000) {
+      peer.handshakeAttempts++;
+      if (peer.handshakeAttempts > 5) return (response: null, remotePubKey: null, remoteSigningPublicKey: null); // Rate limit
     } else {
-      _handshakeAttempts[deviceId] = 1;
+      peer.handshakeAttempts = 1;
     }
-    _lastHandshakeTime[deviceId] = now;
+    peer.lastHandshakeTime = now;
 
     // If we have no pending state, this must be message 1 from a remote central (we're responder).
-    if (!_pendingHandshakes.containsKey(deviceId)) {
+    if (peer.handshake == null) {
       final state = NoiseHandshakeState(
         role: NoiseRole.responder,
         localStaticPrivateKey: _myStaticPrivKey,
@@ -93,7 +126,7 @@ class NoiseSessionManager {
       // Include our signing public key as payload in message 2 (AEAD-encrypted via es DH)
       final message2 = state.writeMessage(payload: _localSigningPublicKey); // -> e, ee, s, es
 
-      _pendingHandshakes[deviceId] = state;
+      peer.handshake = state;
 
       SecureLogger.debug(
         '[NoiseSessionManager] Received handshake message 1 from $deviceId, '
@@ -103,7 +136,7 @@ class NoiseSessionManager {
       return (response: message2, remotePubKey: null, remoteSigningPublicKey: null);
     }
 
-    final state = _pendingHandshakes[deviceId]!;
+    final state = peer.handshake!;
 
     // Process based on current role and handshake progress.
     if (state.role == NoiseRole.initiator) {
@@ -118,15 +151,15 @@ class NoiseSessionManager {
           if (remoteSigningKey.every((b) => b == 0)) {
             throw Exception('Invalid signing key: all-zero key rejected');
           }
-          // Store remote signing key
-          _peerSigningKeys[deviceId] = remoteSigningKey;
+          peer.signingKey = remoteSigningKey;
+          peer.remoteStaticPublicKey = remotePubKey;
 
           final session = NoiseSession.fromHandshake(
             state,
             remotePeerId: remotePubKey,
           );
-          _sessions[deviceId] = session;
-          _pendingHandshakes.remove(deviceId);
+          peer.session = session;
+          peer.handshake = null;
 
           SecureLogger.debug(
             '[NoiseSessionManager] Initiator handshake complete for $deviceId, session established',
@@ -147,15 +180,15 @@ class NoiseSessionManager {
           if (remoteSigningKey.every((b) => b == 0)) {
             throw Exception('Invalid signing key: all-zero key rejected');
           }
-          // Store remote signing key
-          _peerSigningKeys[deviceId] = remoteSigningKey;
+          peer.signingKey = remoteSigningKey;
+          peer.remoteStaticPublicKey = remotePubKey;
 
           final session = NoiseSession.fromHandshake(
             state,
             remotePeerId: remotePubKey,
           );
-          _sessions[deviceId] = session;
-          _pendingHandshakes.remove(deviceId);
+          peer.session = session;
+          peer.handshake = null;
 
           SecureLogger.debug(
             '[NoiseSessionManager] Responder handshake complete for $deviceId, session established',
@@ -170,13 +203,13 @@ class NoiseSessionManager {
   }
 
   /// Check if a session is established for the given BLE device ID.
-  bool hasSession(String deviceId) => _sessions.containsKey(deviceId);
+  bool hasSession(String deviceId) => _peers[deviceId]?.session != null;
 
   /// Encrypt plaintext using the established session for a given device.
   ///
   /// Returns null if no session exists for this device (packet should not be sent).
   Uint8List? encrypt(Uint8List plaintext, String deviceId) {
-    final session = _sessions[deviceId];
+    final session = _peers[deviceId]?.session;
     if (session == null) return null;
     return session.encrypt(plaintext);
   }
@@ -185,7 +218,7 @@ class NoiseSessionManager {
   ///
   /// Returns null if no session exists or decryption fails (packet should be dropped).
   Uint8List? decrypt(Uint8List ciphertext, String deviceId) {
-    final session = _sessions[deviceId];
+    final session = _peers[deviceId]?.session;
     if (session == null) return null;
 
     try {
@@ -198,37 +231,25 @@ class NoiseSessionManager {
 
   /// Remove the session for a given device (e.g., on BLE disconnect).
   void removeSession(String deviceId) {
-    _sessions.remove(deviceId);
-    _pendingHandshakes.remove(deviceId);
-    _peerSigningKeys.remove(deviceId);
-    _lastHandshakeTime.remove(deviceId);
-    _handshakeAttempts.remove(deviceId);
+    _peers.remove(deviceId);
     SecureLogger.debug('[NoiseSessionManager] Removed session for $deviceId');
   }
 
-  /// Get the remote peer's static public key (available after handshake).
+  /// Get the remote peer's static public key (available after handshake completes).
   ///
-  /// Returns null if handshake not complete.
-  Uint8List? getRemotePubKey(String deviceId) {
-    final state = _pendingHandshakes[deviceId];
-    if (state != null && state.isComplete) {
-      return state.remoteStaticPublic;
-    }
-    return null;
-  }
+  /// Returns null if handshake has not completed for this device.
+  Uint8List? getRemotePubKey(String deviceId) => _peers[deviceId]?.remoteStaticPublicKey;
 
   /// Get the remote peer's Ed25519 signing public key (available after handshake).
   ///
   /// Returns null if signing key not yet received.
-  Uint8List? getSigningPublicKey(String deviceId) => _peerSigningKeys[deviceId];
+  Uint8List? getSigningPublicKey(String deviceId) => _peers[deviceId]?.signingKey;
 
   /// Clear all sessions and pending handshakes (e.g., on app shutdown).
   void clear() {
-    _pendingHandshakes.clear();
-    _sessions.forEach((_, session) => session.dispose());
-    _sessions.clear();
-    _peerSigningKeys.clear();
-    _lastHandshakeTime.clear();
-    _handshakeAttempts.clear();
+    for (final peer in _peers.values) {
+      peer.session?.dispose();
+    }
+    _peers.clear();
   }
 }
