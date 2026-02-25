@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:typed_data';
+import '../../shared/logger.dart';
 import '../identity/group_manager.dart';
 import '../identity/peer_id.dart';
 import '../protocol/binary_protocol.dart';
@@ -55,7 +56,11 @@ class ReceiptService {
   void start() {
     _receiptSub = _transport.onPacketReceived
         .where((p) => p.type == MessageType.ack)
-        .listen(_handleIncomingReceipt);
+        .listen(
+          _handleIncomingReceipt,
+          onError: (Object e) =>
+              SecureLogger.warning('ReceiptService: transport stream error: $e'),
+        );
   }
 
   /// Send a delivery receipt for a received message.
@@ -100,17 +105,24 @@ class ReceiptService {
               originalSenderId: ref.senderId,
             ))
         .toList();
-    _pendingReadReceipts.clear();
 
     // Send in chunks so no receipt is silently dropped by the
     // maxBatchReceiptCount cap inside encodeBatchReceiptPayload.
+    // Only clear pending receipts after all chunks are sent successfully.
     final chunkSize = BinaryProtocol.maxBatchReceiptCount;
-    for (var i = 0; i < receipts.length; i += chunkSize) {
-      final chunk = receipts.sublist(
-        i,
-        (i + chunkSize).clamp(0, receipts.length),
-      );
-      await _sendBatchReceipts(chunk);
+    try {
+      for (var i = 0; i < receipts.length; i += chunkSize) {
+        final chunk = receipts.sublist(
+          i,
+          (i + chunkSize).clamp(0, receipts.length),
+        );
+        await _sendBatchReceipts(chunk);
+      }
+      _pendingReadReceipts.clear();
+    } catch (e) {
+      SecureLogger.warning('ReceiptService: failed to flush read receipts: $e');
+      // Receipts remain in _pendingReadReceipts; reschedule for retry.
+      _readBatchTimer ??= Timer(const Duration(seconds: 5), _flushReadReceipts);
     }
   }
 

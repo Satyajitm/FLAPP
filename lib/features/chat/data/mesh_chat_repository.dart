@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:typed_data';
+import '../../../shared/logger.dart';
 import '../../../core/identity/group_manager.dart';
 import '../../../core/identity/peer_id.dart';
 import '../../../core/protocol/binary_protocol.dart';
@@ -43,7 +44,11 @@ class MeshChatRepository implements ChatRepository {
   void _listenForMessages() {
     _packetSub = _transport.onPacketReceived
         .where((p) => p.type == MessageType.chat || p.type == MessageType.noiseEncrypted)
-        .listen(_handleIncomingPacket);
+        .listen(
+          _handleIncomingPacket,
+          onError: (Object e) =>
+              SecureLogger.warning('MeshChatRepository: transport stream error: $e'),
+        );
   }
 
   void _handleIncomingPacket(FluxonPacket packet) {

@@ -172,7 +172,6 @@ class BleDeviceTerminalRepository implements DeviceTerminalRepository {
   @override
   void dispose() {
     _cleanup();
-    _scanSub?.cancel();
     _scanController.close();
     _dataController.close();
     _statusController.close();

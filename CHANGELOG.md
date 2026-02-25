@@ -5,6 +5,32 @@ Each entry records **what** changed, **which files** were affected, and **why** 
 
 ---
 
+## [v4.7] — Integration Bug Fixes
+**Date:** 2026-02-25
+**Branch:** `Major_Security_Fixes`
+**Status:** Complete — 780/780 tests passing · Zero compile errors
+
+### Summary
+Full resolution of 4 integration bugs found during a cross-layer codebase audit. Fixes cover silent stream failure modes in the chat and receipt layers, lost read receipts on BLE transport errors, and dead code in the device terminal cleanup path.
+
+---
+
+### Bug Fixes
+
+#### BUG-1 — Missing `onError` handler in MeshChatRepository stream — `lib/features/chat/data/mesh_chat_repository.dart`
+The `_listenForMessages()` subscription had no `onError` callback. If the underlying Transport stream threw an exception (e.g. BLE stack error), the subscription silently terminated and no further chat messages were received until the app restarted. `MeshLocationRepository` and `MeshEmergencyRepository` both already had `onError` handlers — chat was the inconsistent outlier. Fixed: added matching `onError` handler that logs via `SecureLogger.warning`.
+
+#### BUG-2 — Missing `onError` handler in ReceiptService stream — `lib/core/services/receipt_service.dart`
+Same pattern as BUG-1: `ReceiptService.start()` subscribed to ACK packets without an `onError` handler. A Transport stream failure would silently kill all delivery/read receipt tracking. Fixed: added `onError` handler with `SecureLogger.warning` logging.
+
+#### BUG-3 — Pending read receipts cleared before successful send — `lib/core/services/receipt_service.dart`
+`_flushReadReceipts()` called `_pendingReadReceipts.clear()` before the BLE broadcast completed. If `_sendBatchReceipts()` threw (BLE down, MTU error, etc.), those receipts were permanently lost with no retry. Fixed: moved `_pendingReadReceipts.clear()` inside the `try` block after all chunks send successfully. On failure, receipts remain in the map and a 5-second retry timer is scheduled via `_readBatchTimer`.
+
+#### BUG-4 — Redundant `_scanSub?.cancel()` in BleDeviceTerminalRepository.dispose() — `lib/features/device_terminal/data/ble_device_terminal_repository.dart`
+`dispose()` called `_cleanup()` which already cancelled and nullified `_scanSub`, then immediately called `_scanSub?.cancel()` again — dead code. Removed the redundant call.
+
+---
+
 ## [v4.6] — Crypto Security Audit v2 Patch
 **Date:** 2026-02-25
 **Branch:** `Major_Security_Fixes`
