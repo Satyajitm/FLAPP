@@ -43,6 +43,7 @@ class LocationController extends StateNotifier<LocationState> {
 
   Timer? _broadcastTimer;
   StreamSubscription? _locationSub;
+  bool _isDisposed = false;
 
   /// Last successfully broadcast location (used for movement-change throttle).
   LocationUpdate? _lastBroadcastLocation;
@@ -80,7 +81,7 @@ class LocationController extends StateNotifier<LocationState> {
     await _broadcastCurrentLocation();
     _broadcastTimer = Timer.periodic(
       Duration(seconds: _config.locationBroadcastIntervalSeconds),
-      (_) => _broadcastCurrentLocation(),
+      (_) { if (!_isDisposed) _broadcastCurrentLocation(); },
     );
   }
 
@@ -97,6 +98,7 @@ class LocationController extends StateNotifier<LocationState> {
   Future<void> _broadcastCurrentLocation() async {
     try {
       final myUpdate = await _repository.getCurrentLocation(_myPeerId);
+      if (_isDisposed) return;
 
       // Always update local display, but skip the network broadcast if the
       // device hasn't moved at least 5 metres since the last broadcast.
@@ -124,6 +126,7 @@ class LocationController extends StateNotifier<LocationState> {
 
   @override
   void dispose() {
+    _isDisposed = true;
     _broadcastTimer?.cancel();
     _locationSub?.cancel();
     _repository.dispose();

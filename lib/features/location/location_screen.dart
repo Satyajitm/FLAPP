@@ -31,6 +31,12 @@ class _LocationScreenState extends ConsumerState<LocationScreen> {
     SchedulerBinding.instance.addPostFrameCallback((_) => _initTileCache());
   }
 
+  @override
+  void dispose() {
+    _mapController.dispose();
+    super.dispose();
+  }
+
   Future<void> _initTileCache() async {
     try {
       final cacheDir = await getApplicationCacheDirectory();

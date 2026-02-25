@@ -95,11 +95,11 @@ class _HomeScreenState extends State<_HomeScreen> with WidgetsBindingObserver {
     }
   }
 
-  static const _screens = [
-    ChatScreen(),
-    LocationScreen(),
-    EmergencyScreen(),
-    DeviceTerminalScreen(),
+  final _screens = [
+    const ChatScreen(),
+    const LocationScreen(),
+    const EmergencyScreen(),
+    const DeviceTerminalScreen(),
   ];
 
   @override

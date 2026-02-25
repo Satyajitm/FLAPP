@@ -48,6 +48,7 @@ class ChatController extends StateNotifier<ChatState> {
   final String? _groupId;
   StreamSubscription? _messageSub;
   StreamSubscription? _receiptSub;
+  bool _isDisposed = false;
 
   ChatController({
     required ChatRepository repository,
@@ -92,6 +93,7 @@ class ChatController extends StateNotifier<ChatState> {
 
   void _listenForMessages() {
     _messageSub = _repository.onMessageReceived.listen((message) async {
+      if (_isDisposed) return;
       final updated = [...state.messages, message];
       // Cap in-memory list at 200; older messages remain on disk.
       final capped = updated.length > _maxInMemoryMessages
@@ -106,6 +108,7 @@ class ChatController extends StateNotifier<ChatState> {
 
   void _listenForReceipts() {
     _receiptSub = _repository.onReceiptReceived.listen((receipt) async {
+      if (_isDisposed) return;
       await _handleReceipt(receipt);
     });
   }
@@ -146,10 +149,11 @@ class ChatController extends StateNotifier<ChatState> {
       readBy: newReadBy,
     );
 
+    if (_isDisposed) return;
     state = state.copyWith(messages: messages);
     // Receipt status changes (delivered/read ticks) are persisted lazily —
     // the debounced MessageStorageService write is sufficient here.
-    _storageService?.saveMessages(_groupId ?? '', state.messages);
+    await _storageService?.saveMessages(_groupId ?? '', state.messages);
   }
 
   /// Mark incoming messages as read and send read receipts.
@@ -206,6 +210,7 @@ class ChatController extends StateNotifier<ChatState> {
 
   @override
   void dispose() {
+    _isDisposed = true;
     _messageSub?.cancel();
     _receiptSub?.cancel();
     _repository.dispose();

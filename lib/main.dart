@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -38,7 +39,14 @@ Future<void> main() async {
   await Future.wait([
     identityManager.initialize(),
     groupManager.initialize(),
-    profileManager.initialize(),
+    profileManager.initialize().catchError((Object e, StackTrace st) {
+      developer.log(
+        'UserProfileManager.initialize() failed — display name will be empty',
+        name: 'FluxonApp.main',
+        error: e,
+        stackTrace: st,
+      );
+    }),
   ]);
 
   // Derive peer ID from the identity's public key

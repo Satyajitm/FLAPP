@@ -177,6 +177,7 @@ class _EmergencyScreenState extends ConsumerState<EmergencyScreen> {
               itemBuilder: (context, index) {
                 final alert = alerts[alerts.length - 1 - index];
                 return ListTile(
+                  key: ValueKey('${alert.sender.shortId}:${alert.timestamp.millisecondsSinceEpoch}'),
                   leading: Icon(
                     Icons.warning,
                     color: alert.isLocal ? Colors.red : Colors.orange,
@@ -186,7 +187,7 @@ class _EmergencyScreenState extends ConsumerState<EmergencyScreen> {
                     alert.isLocal ? 'Sent by you' : 'From nearby peer',
                   ),
                   trailing: Text(
-                    '${alert.timestamp.hour}:${alert.timestamp.minute.toString().padLeft(2, '0')}',
+                    '${alert.timestamp.hour.toString().padLeft(2, '0')}:${alert.timestamp.minute.toString().padLeft(2, '0')}',
                     style: const TextStyle(color: Colors.grey),
                   ),
                 );

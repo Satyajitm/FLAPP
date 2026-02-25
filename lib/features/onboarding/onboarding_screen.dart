@@ -37,6 +37,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
 
     setState(() => _isSaving = true);
     await ref.read(userProfileManagerProvider).setName(name);
+    if (!mounted) return;
     ref.read(displayNameProvider.notifier).state = name;
     // FluxonApp rebuilds and switches to _HomeScreen.
   }

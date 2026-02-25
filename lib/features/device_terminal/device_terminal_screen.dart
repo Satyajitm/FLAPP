@@ -155,6 +155,7 @@ class _DeviceTerminalScreenState extends ConsumerState<DeviceTerminalScreen> {
                   itemBuilder: (context, index) {
                     final device = state.scanResults[index];
                     return _DeviceTile(
+                      key: ValueKey(device.id),
                       device: device,
                       isConnecting: isConnecting,
                       onConnect: () => ref
@@ -237,6 +238,7 @@ class _DeviceTerminalScreenState extends ConsumerState<DeviceTerminalScreen> {
                   itemCount: state.messages.length,
                   itemBuilder: (context, index) {
                     return _TerminalMessageBubble(
+                      key: ValueKey(state.messages[index].id),
                       message: state.messages[index],
                       displayMode: state.displayMode,
                     );
@@ -472,6 +474,7 @@ class _DeviceTile extends StatelessWidget {
   final VoidCallback onConnect;
 
   const _DeviceTile({
+    super.key,
     required this.device,
     required this.isConnecting,
     required this.onConnect,
@@ -528,6 +531,7 @@ class _TerminalMessageBubble extends StatelessWidget {
   final TerminalDisplayMode displayMode;
 
   const _TerminalMessageBubble({
+    super.key,
     required this.message,
     required this.displayMode,
   });

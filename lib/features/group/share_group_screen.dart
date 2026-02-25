@@ -33,9 +33,7 @@ class ShareGroupScreen extends StatelessWidget {
         backgroundColor: Theme.of(context).scaffoldBackgroundColor,
         leading: IconButton(
           icon: const Icon(Icons.close),
-          onPressed: () => Navigator.of(context)
-            ..pop()   // pop ShareGroupScreen
-            ..pop(),  // pop CreateGroupScreen
+          onPressed: () => Navigator.of(context).popUntil((route) => route.isFirst),
         ),
       ),
       body: SingleChildScrollView(
@@ -176,9 +174,7 @@ class ShareGroupScreen extends StatelessWidget {
             ),
             const SizedBox(height: 40),
             FilledButton(
-              onPressed: () => Navigator.of(context)
-                ..pop()
-                ..pop(),
+              onPressed: () => Navigator.of(context).popUntil((route) => route.isFirst),
               style: FilledButton.styleFrom(
                 minimumSize: const Size.fromHeight(52),
                 shape: RoundedRectangleBorder(

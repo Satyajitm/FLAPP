@@ -50,6 +50,7 @@ class DeviceTerminalController extends StateNotifier<DeviceTerminalState> {
   StreamSubscription? _dataSub;
   StreamSubscription? _statusSub;
   int _messageCounter = 0;
+  bool _isDisposed = false;
 
   DeviceTerminalController({
     required DeviceTerminalRepository repository,
@@ -70,6 +71,7 @@ class DeviceTerminalController extends StateNotifier<DeviceTerminalState> {
 
   void _listenForData() {
     _dataSub = _repository.onDataReceived.listen((data) {
+      if (_isDisposed) return;
       final msg = TerminalMessage(
         id: 'rx_${_messageCounter++}',
         data: data,
@@ -180,6 +182,7 @@ class DeviceTerminalController extends StateNotifier<DeviceTerminalState> {
 
   @override
   void dispose() {
+    _isDisposed = true;
     _scanSub?.cancel();
     _dataSub?.cancel();
     _statusSub?.cancel();

@@ -48,13 +48,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   void _showGroupMenu() {
+    final displayName = ref.read(displayNameProvider);
     showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (ctx) {
-        final displayName = ref.read(displayNameProvider);
         return SafeArea(
           child: Column(
             mainAxisSize: MainAxisSize.min,

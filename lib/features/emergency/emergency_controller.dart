@@ -101,6 +101,7 @@ class EmergencyController extends StateNotifier<EmergencyState> {
   final EmergencyRepository _repository;
   final PeerId _myPeerId;
   StreamSubscription? _alertSub;
+  bool _isDisposed = false;
 
   /// Maximum number of manual retries allowed after the initial send attempt.
   static const maxRetries = 5;
@@ -162,7 +163,7 @@ class EmergencyController extends StateNotifier<EmergencyState> {
     await Future.delayed(delay);
 
     // Guard against disposal during the backoff delay.
-    if (!mounted) return;
+    if (_isDisposed) return;
 
     await _doSend();
   }
@@ -179,7 +180,7 @@ class EmergencyController extends StateNotifier<EmergencyState> {
         message: alert.message,
       );
 
-      if (!mounted) return;
+      if (_isDisposed) return;
 
       final emergencyAlert = EmergencyAlert(
         sender: _myPeerId,
@@ -198,14 +199,16 @@ class EmergencyController extends StateNotifier<EmergencyState> {
         retryCount: 0,
       );
     } catch (_) {
-      if (!mounted) return;
+      if (_isDisposed) return;
       state = state.copyWith(isSending: false, hasSendError: true);
     }
   }
 
   @override
   void dispose() {
+    _isDisposed = true;
     _alertSub?.cancel();
+    _repository.dispose();
     super.dispose();
   }
 }

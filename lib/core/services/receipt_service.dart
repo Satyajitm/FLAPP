@@ -38,6 +38,7 @@ class ReceiptService {
   StreamSubscription? _receiptSub;
   Timer? _readBatchTimer;
   final Map<String, _OriginalMessageRef> _pendingReadReceipts = {};
+  bool _isDisposed = false;
 
   ReceiptService({
     required Transport transport,
@@ -82,9 +83,9 @@ class ReceiptService {
     _readBatchTimer ??= Timer(const Duration(seconds: 2), _flushReadReceipts);
   }
 
-  void _flushReadReceipts() {
+  Future<void> _flushReadReceipts() async {
     _readBatchTimer = null;
-    if (_pendingReadReceipts.isEmpty) return;
+    if (_isDisposed || _pendingReadReceipts.isEmpty) return;
 
     final receipts = _pendingReadReceipts.values
         .map((ref) => ReceiptPayload(
@@ -96,10 +97,10 @@ class ReceiptService {
     _pendingReadReceipts.clear();
 
     // Send all pending read receipts as a single BLE packet.
-    _sendBatchReceipts(receipts);
+    await _sendBatchReceipts(receipts);
   }
 
-  void _sendBatchReceipts(List<ReceiptPayload> receipts) {
+  Future<void> _sendBatchReceipts(List<ReceiptPayload> receipts) async {
     var payload = BinaryProtocol.encodeBatchReceiptPayload(receipts);
 
     if (_groupManager.isInGroup) {
@@ -113,7 +114,7 @@ class ReceiptService {
       payload: payload,
     );
 
-    _transport.broadcastPacket(packet);
+    await _transport.broadcastPacket(packet);
   }
 
   Future<void> _sendReceipt({
@@ -178,6 +179,7 @@ class ReceiptService {
   }
 
   void dispose() {
+    _isDisposed = true;
     _receiptSub?.cancel();
     _readBatchTimer?.cancel();
     _receiptController.close();
