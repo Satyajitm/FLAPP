@@ -17,7 +17,7 @@ import 'package:fluxon_app/core/identity/peer_id.dart';
 
 class FakeGroupCipher implements GroupCipher {
   @override
-  Uint8List? encrypt(Uint8List plaintext, Uint8List? groupKey) {
+  Uint8List? encrypt(Uint8List plaintext, Uint8List? groupKey, {Uint8List? additionalData}) {
     if (groupKey == null) return null;
     // Simple XOR "encryption" for testing
     final result = Uint8List(plaintext.length);
@@ -28,10 +28,13 @@ class FakeGroupCipher implements GroupCipher {
   }
 
   @override
-  Uint8List? decrypt(Uint8List data, Uint8List? groupKey) {
+  Uint8List? decrypt(Uint8List data, Uint8List? groupKey, {Uint8List? additionalData}) {
     // XOR is its own inverse
     return encrypt(data, groupKey);
   }
+
+  @override
+  void clearCache() {}
 
   @override
   Uint8List deriveGroupKey(String passphrase, Uint8List salt) {

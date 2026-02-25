@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'group_cipher.dart';
 import 'group_storage.dart';
 import 'peer_id.dart';
+import '../protocol/message_types.dart';
 
 /// Fluxonlink-specific shared-passphrase group system.
 ///
@@ -132,6 +133,8 @@ class GroupManager {
   /// Leave the current group.
   void leaveGroup() {
     _activeGroup = null;
+    // HIGH-C2: Evict all cached derived keys from GroupCipher on leave.
+    _cipher.clearCache();
     unawaited(_groupStorage.deleteGroup());
   }
 
@@ -146,13 +149,26 @@ class GroupManager {
   }
 
   /// Encrypt data with the group key (for location/emergency broadcasts).
-  Uint8List? encryptForGroup(Uint8List plaintext) {
-    return _cipher.encrypt(plaintext, _activeGroup?.key);
+  ///
+  /// MED-C1: Pass the [messageType] as 1-byte associated data so that the
+  /// AEAD tag binds the ciphertext to the intended message type.
+  Uint8List? encryptForGroup(Uint8List plaintext, {MessageType? messageType}) {
+    Uint8List? ad;
+    if (messageType != null) {
+      ad = Uint8List.fromList([messageType.value]);
+    }
+    return _cipher.encrypt(plaintext, _activeGroup?.key, additionalData: ad);
   }
 
   /// Decrypt data with the group key.
-  Uint8List? decryptFromGroup(Uint8List data) {
-    return _cipher.decrypt(data, _activeGroup?.key);
+  ///
+  /// MED-C1: [messageType] must match what was passed to [encryptForGroup].
+  Uint8List? decryptFromGroup(Uint8List data, {MessageType? messageType}) {
+    Uint8List? ad;
+    if (messageType != null) {
+      ad = Uint8List.fromList([messageType.value]);
+    }
+    return _cipher.decrypt(data, _activeGroup?.key, additionalData: ad);
   }
 }
 

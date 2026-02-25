@@ -648,7 +648,11 @@ class BleTransport extends Transport {
         var sendData = data;
         if (_noiseSessionManager.hasSession(entry.key)) {
           final encrypted = _noiseSessionManager.encrypt(data, entry.key);
-          if (encrypted != null) sendData = encrypted;
+          // CRIT-C2: If encrypt() returns null (rekey needed), skip this peer
+          // rather than sending plaintext. The session will be re-established
+          // on the next handshake cycle.
+          if (encrypted == null) return;
+          sendData = encrypted;
         }
         await entry.value.write(sendData, withoutResponse: true);
         _log('Sent to ${entry.key}');

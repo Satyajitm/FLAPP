@@ -23,8 +23,13 @@ class MessageStorageService {
   static const _secureStorage = FlutterSecureStorage();
   static const _fileKeyStorageKey = 'message_file_enc_key';
 
-  /// Cached file encryption key (lazy-loaded from flutter_secure_storage).
+  /// Cached file encryption key bytes (lazy-loaded from flutter_secure_storage).
   Uint8List? _fileEncryptionKey;
+
+  /// LOW-C4: Cached [SecureKey] wrapper for the file encryption key.
+  /// Re-using a single SecureKey avoids allocating a new libsodium secure
+  /// buffer on every encrypt/decrypt call. Disposed in [dispose].
+  SecureKey? _fileSecureKey;
 
   /// Cached directory path to avoid repeated lookups.
   String? _cachedDirPath;
@@ -62,18 +67,27 @@ class MessageStorageService {
     return _fileEncryptionKey!;
   }
 
+  /// LOW-C4: Get or create a cached [SecureKey] for the file encryption key.
+  Future<SecureKey> _getFileSecureKey() async {
+    if (_fileSecureKey != null) return _fileSecureKey!;
+    final sodium = sodiumInstance;
+    final keyBytes = await _getFileKey();
+    _fileSecureKey = SecureKey.fromList(sodium, keyBytes);
+    return _fileSecureKey!;
+  }
+
   /// Encrypt [data] with the file encryption key (ChaCha20-Poly1305).
   ///
   /// Returns nonce prepended to ciphertext. Override in tests to bypass
   /// encryption (avoids sodium native-binary requirement on host tests).
   Future<Uint8List> encryptData(Uint8List data) async {
     final sodium = sodiumInstance;
-    final key = await _getFileKey();
+    final secureKey = await _getFileSecureKey();
     final nonce = sodium.randombytes.buf(sodium.crypto.aeadXChaCha20Poly1305IETF.nonceBytes);
     final ciphertext = sodium.crypto.aeadXChaCha20Poly1305IETF.encrypt(
       message: data,
       nonce: nonce,
-      key: SecureKey.fromList(sodium, key),
+      key: secureKey,
     );
     final result = Uint8List(nonce.length + ciphertext.length);
     result.setAll(0, nonce);
@@ -86,7 +100,7 @@ class MessageStorageService {
   /// Override in tests to bypass encryption.
   Future<Uint8List?> decryptData(Uint8List data) async {
     final sodium = sodiumInstance;
-    final key = await _getFileKey();
+    final secureKey = await _getFileSecureKey();
     final nonceLen = sodium.crypto.aeadXChaCha20Poly1305IETF.nonceBytes;
     if (data.length < nonceLen) return null;
     final nonce = Uint8List.sublistView(data, 0, nonceLen);
@@ -95,7 +109,7 @@ class MessageStorageService {
       return sodium.crypto.aeadXChaCha20Poly1305IETF.decrypt(
         cipherText: ciphertext,
         nonce: nonce,
-        key: SecureKey.fromList(sodium, key),
+        key: secureKey,
       );
     } catch (_) {
       return null;
@@ -239,6 +253,9 @@ class MessageStorageService {
     _debounceTimer?.cancel();
     _debounceTimer = null;
     await _flushPendingWrites();
+    // LOW-C4: Dispose the cached SecureKey wrapper.
+    _fileSecureKey?.dispose();
+    _fileSecureKey = null;
   }
 
   /// Delete all persisted messages for a group (removes the file).

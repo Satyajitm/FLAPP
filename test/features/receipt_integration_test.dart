@@ -55,7 +55,7 @@ class _MockTransport implements Transport {
 
 class _FakeGroupCipher implements GroupCipher {
   @override
-  Uint8List? encrypt(Uint8List plaintext, Uint8List? groupKey) {
+  Uint8List? encrypt(Uint8List plaintext, Uint8List? groupKey, {Uint8List? additionalData}) {
     if (groupKey == null) return null;
     final result = Uint8List(plaintext.length);
     for (var i = 0; i < plaintext.length; i++) {
@@ -65,7 +65,7 @@ class _FakeGroupCipher implements GroupCipher {
   }
 
   @override
-  Uint8List? decrypt(Uint8List data, Uint8List? groupKey) =>
+  Uint8List? decrypt(Uint8List data, Uint8List? groupKey, {Uint8List? additionalData}) =>
       encrypt(data, groupKey);
 
   @override
@@ -124,6 +124,9 @@ class _FakeGroupCipher implements GroupCipher {
     }
     return Uint8List.fromList(result);
   }
+
+  @override
+  void clearCache() {}
 }
 
 class _FakeSecureStorage implements FlutterSecureStorage {

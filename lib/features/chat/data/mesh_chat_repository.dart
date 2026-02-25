@@ -57,7 +57,7 @@ class MeshChatRepository implements ChatRepository {
     // For chat: decrypt with group key if in a group
     Uint8List payload = packet.payload;
     if (packet.type == MessageType.chat && _groupManager.isInGroup) {
-      final decrypted = _groupManager.decryptFromGroup(payload);
+      final decrypted = _groupManager.decryptFromGroup(payload, messageType: MessageType.chat);
       if (decrypted == null) return; // Not in our group — drop
       payload = decrypted;
     }
@@ -99,7 +99,7 @@ class MeshChatRepository implements ChatRepository {
 
     // Encrypt with group key if in a group
     if (_groupManager.isInGroup) {
-      final encrypted = _groupManager.encryptForGroup(payload);
+      final encrypted = _groupManager.encryptForGroup(payload, messageType: MessageType.chat);
       if (encrypted != null) payload = encrypted;
     }
 

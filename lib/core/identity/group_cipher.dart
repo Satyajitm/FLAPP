@@ -26,7 +26,11 @@ class GroupCipher {
   /// secure buffer on every [encrypt]/[decrypt] call. Invalidated whenever
   /// the key bytes change.
   SecureKey? _cachedGroupSecureKey;
-  Uint8List? _cachedGroupKeyBytes;
+
+  /// MED-C5: Store a BLAKE2b-32 hash of the cached key instead of the raw bytes.
+  /// This avoids keeping the actual key material in the GC-managed heap for
+  /// the sole purpose of change-detection.
+  Uint8List? _cachedGroupKeyHash;
 
   // RFC 4648 base32 alphabet (no padding character)
   static const _b32Chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
@@ -42,26 +46,34 @@ class GroupCipher {
   ///
   /// Avoids allocating a new libsodium secure buffer on every encrypt/decrypt
   /// call. The cache is invalidated when the key bytes change.
+  ///
+  /// MED-C5: Change-detection uses a BLAKE2b-32 hash of the key rather than
+  /// storing the raw key bytes in the GC-managed Dart heap.
   SecureKey _getGroupSecureKey(Uint8List groupKey) {
     final sodium = sodiumInstance;
+    final incoming = sodium.crypto.genericHash(message: groupKey, outLen: 32);
     final cached = _cachedGroupSecureKey;
-    final cachedBytes = _cachedGroupKeyBytes;
+    final cachedHash = _cachedGroupKeyHash;
     if (cached != null &&
-        cachedBytes != null &&
-        bytesEqual(cachedBytes, groupKey)) {
+        cachedHash != null &&
+        bytesEqual(cachedHash, incoming)) {
       return cached;
     }
     cached?.dispose();
     final key = SecureKey.fromList(sodium, groupKey);
     _cachedGroupSecureKey = key;
-    _cachedGroupKeyBytes = groupKey;
+    _cachedGroupKeyHash = incoming;
     return key;
   }
 
   /// Encrypt data with the given group key using ChaCha20-Poly1305.
   ///
+  /// MED-C1: [additionalData] is bound into the AEAD tag so that ciphertext
+  /// from one message type cannot be replayed as another type.
+  /// Callers should pass the 1-byte [MessageType] value as AD.
+  ///
   /// Returns nonce prepended to ciphertext, or null if [groupKey] is null.
-  Uint8List? encrypt(Uint8List plaintext, Uint8List? groupKey) {
+  Uint8List? encrypt(Uint8List plaintext, Uint8List? groupKey, {Uint8List? additionalData}) {
     if (groupKey == null) return null;
     final sodium = sodiumInstance;
 
@@ -73,6 +85,7 @@ class GroupCipher {
       message: plaintext,
       nonce: nonce,
       key: _getGroupSecureKey(groupKey),
+      additionalData: additionalData,
     );
 
     // Prepend nonce to ciphertext
@@ -85,7 +98,8 @@ class GroupCipher {
   /// Decrypt data with the given group key.
   ///
   /// Expects nonce prepended to ciphertext. Returns null on failure.
-  Uint8List? decrypt(Uint8List data, Uint8List? groupKey) {
+  /// MED-C1: [additionalData] must match what was passed to [encrypt].
+  Uint8List? decrypt(Uint8List data, Uint8List? groupKey, {Uint8List? additionalData}) {
     if (groupKey == null) return null;
     final sodium = sodiumInstance;
 
@@ -100,9 +114,10 @@ class GroupCipher {
         cipherText: ciphertext,
         nonce: nonce,
         key: _getGroupSecureKey(groupKey),
+        additionalData: additionalData,
       );
     } catch (_) {
-      return null; // Decryption failed — wrong group key
+      return null; // Decryption failed — wrong group key or mismatched AD
     }
   }
 
@@ -142,10 +157,14 @@ class GroupCipher {
     final keyBytes = key.extractBytes();
     key.dispose();
 
-    final input = Uint8List.fromList(
-      utf8.encode('fluxon-group-id:$passphrase:') + salt,
+    // MED-C3: Derive group ID from the Argon2id key output, NOT from the raw
+    // passphrase. Deriving from the passphrase directly allows fast brute-force
+    // attacks with BLAKE2b. Deriving from the Argon2id output inherits the
+    // full Argon2id work factor.
+    final idInput = Uint8List.fromList(
+      utf8.encode('fluxon-group-id:') + keyBytes,
     );
-    final hash = sodium.crypto.genericHash(message: input, outLen: 16);
+    final hash = sodium.crypto.genericHash(message: idInput, outLen: 16);
     final groupId = hash.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 
     final result = _DerivedGroup(keyBytes, groupId);
@@ -166,6 +185,30 @@ class GroupCipher {
   /// different salts get different IDs.
   String generateGroupId(String passphrase, Uint8List salt) =>
       _derive(passphrase, salt).groupId;
+
+  /// HIGH-C2: Evict the derivation cache and zero all cached key material.
+  ///
+  /// Call this when leaving a group to prevent derived keys from lingering
+  /// indefinitely in the GC heap.
+  void clearCache() {
+    // Zero all cached key bytes before removing from map.
+    for (final entry in _derivationCache.values) {
+      for (int i = 0; i < entry.key.length; i++) {
+        entry.key[i] = 0;
+      }
+    }
+    _derivationCache.clear();
+
+    // Also clear the SecureKey wrapper cache and the key hash.
+    _cachedGroupSecureKey?.dispose();
+    _cachedGroupSecureKey = null;
+    if (_cachedGroupKeyHash != null) {
+      for (int i = 0; i < _cachedGroupKeyHash!.length; i++) {
+        _cachedGroupKeyHash![i] = 0;
+      }
+      _cachedGroupKeyHash = null;
+    }
+  }
 
   /// Encode [salt] bytes as an unpadded RFC 4648 base32 string.
   ///

@@ -62,10 +62,13 @@ class _FakeGroupCipher implements GroupCipher {
       'fake-id-${passphrase.hashCode}';
 
   @override
-  Uint8List? encrypt(Uint8List plaintext, Uint8List? groupKey) => null;
+  Uint8List? encrypt(Uint8List plaintext, Uint8List? groupKey, {Uint8List? additionalData}) => null;
 
   @override
-  Uint8List? decrypt(Uint8List data, Uint8List? groupKey) => null;
+  Uint8List? decrypt(Uint8List data, Uint8List? groupKey, {Uint8List? additionalData}) => null;
+
+  @override
+  void clearCache() {}
 }
 
 // ---------------------------------------------------------------------------

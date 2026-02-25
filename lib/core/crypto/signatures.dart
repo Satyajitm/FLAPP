@@ -11,9 +11,11 @@ class Signatures {
   /// packet). Populated lazily on first [sign] call.
   static SecureKey? _cachedSigningKey;
 
-  /// LOW-2: Hash of the cached key's bytes (for change detection).
-  /// Using a hash avoids keeping the raw key bytes in Dart GC-managed heap.
-  static int _cachedKeyHashCode = 0;
+  /// CRIT-C3: A copy of the cached key bytes used for constant-time comparison.
+  /// Stored as raw bytes so we can do a proper constant-time XOR comparison
+  /// rather than relying on Object.hashAll which is order-dependent and
+  /// not collision-resistant.
+  static Uint8List? _cachedKeyBytes;
 
   /// Generate an Ed25519 signing key pair.
   static ({Uint8List privateKey, Uint8List publicKey}) generateSigningKeyPair() {
@@ -35,13 +37,25 @@ class Signatures {
   static Uint8List sign(Uint8List message, Uint8List privateKey) {
     final sodium = sodiumInstance;
 
-    // LOW-2: Use a hash of the key for change-detection instead of a raw copy.
-    // This avoids retaining the private key bytes in GC-managed Dart heap.
-    final keyHash = Object.hashAll(privateKey);
-    if (_cachedSigningKey == null || _cachedKeyHashCode != keyHash) {
+    // CRIT-C3: Use a constant-time XOR accumulator to compare the incoming
+    // key against the cached key bytes. This prevents timing side-channels
+    // that could leak information about when the key changes.
+    final cachedBytes = _cachedKeyBytes;
+    bool keyChanged = _cachedSigningKey == null ||
+        cachedBytes == null ||
+        cachedBytes.length != privateKey.length;
+    if (!keyChanged) {
+      int diff = 0;
+      for (int i = 0; i < privateKey.length; i++) {
+        diff |= cachedBytes[i] ^ privateKey[i];
+      }
+      keyChanged = diff != 0;
+    }
+    if (keyChanged) {
       _cachedSigningKey?.dispose();
       _cachedSigningKey = SecureKey.fromList(sodium, privateKey);
-      _cachedKeyHashCode = keyHash;
+      // Keep a copy for future constant-time comparisons.
+      _cachedKeyBytes = Uint8List.fromList(privateKey);
     }
 
     return sodium.crypto.sign.detached(
@@ -54,7 +68,13 @@ class Signatures {
   static void clearCache() {
     _cachedSigningKey?.dispose();
     _cachedSigningKey = null;
-    _cachedKeyHashCode = 0;
+    // Zero the cached key bytes before discarding.
+    if (_cachedKeyBytes != null) {
+      for (int i = 0; i < _cachedKeyBytes!.length; i++) {
+        _cachedKeyBytes![i] = 0;
+      }
+      _cachedKeyBytes = null;
+    }
   }
 
 

@@ -2,14 +2,19 @@ import 'dart:typed_data';
 
 /// Returns `true` if [a] and [b] have the same length and identical bytes.
 ///
+/// HIGH-C3: Uses an XOR accumulator pattern to avoid early-return timing
+/// side-channels. This ensures comparison time is always O(n) regardless of
+/// where bytes differ, preventing oracles that leak key material position.
+///
 /// Shared utility used by [PeerId], [MeshService], and [Signatures] to avoid
 /// duplicating a byte-comparison loop in multiple files.
 bool bytesEqual(Uint8List a, Uint8List b) {
   if (a.length != b.length) return false;
+  int diff = 0;
   for (var i = 0; i < a.length; i++) {
-    if (a[i] != b[i]) return false;
+    diff |= a[i] ^ b[i];
   }
-  return true;
+  return diff == 0;
 }
 
 /// 256-entry lookup table: byte value → two-character lowercase hex string.

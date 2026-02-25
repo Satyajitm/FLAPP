@@ -34,13 +34,14 @@ class _FakeSecureStorage implements FlutterSecureStorage {
 }
 
 class _FakeGroupCipher implements GroupCipher {
-  @override Uint8List? encrypt(Uint8List p, Uint8List? k) => k == null ? null : Uint8List.fromList(p);
-  @override Uint8List? decrypt(Uint8List d, Uint8List? k) => k == null ? null : Uint8List.fromList(d);
+  @override Uint8List? encrypt(Uint8List p, Uint8List? k, {Uint8List? additionalData}) => k == null ? null : Uint8List.fromList(p);
+  @override Uint8List? decrypt(Uint8List d, Uint8List? k, {Uint8List? additionalData}) => k == null ? null : Uint8List.fromList(d);
   @override Uint8List deriveGroupKey(String p, Uint8List s) => Uint8List(32);
   @override String generateGroupId(String p, Uint8List s) => 'fake-group';
   @override Uint8List generateSalt() => Uint8List(16);
   @override String encodeSalt(Uint8List s) => 'A' * 26;
   @override Uint8List decodeSalt(String c) => Uint8List(16);
+  @override void clearCache() {}
 }
 
 class _StubChatController extends StateNotifier<ChatState> implements ChatController {

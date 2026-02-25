@@ -55,7 +55,7 @@ class MeshLocationRepository implements LocationRepository {
     // Decrypt with group key if in a group
     Uint8List payload = packet.payload;
     if (_groupManager.isInGroup) {
-      final decrypted = _groupManager.decryptFromGroup(payload);
+      final decrypted = _groupManager.decryptFromGroup(payload, messageType: MessageType.locationUpdate);
       if (decrypted == null) return; // Not in our group
       payload = decrypted;
     }
@@ -111,7 +111,7 @@ class MeshLocationRepository implements LocationRepository {
 
     // Encrypt with group key if in a group
     if (_groupManager.isInGroup) {
-      final encrypted = _groupManager.encryptForGroup(payload);
+      final encrypted = _groupManager.encryptForGroup(payload, messageType: MessageType.locationUpdate);
       if (encrypted != null) payload = encrypted;
     }
 

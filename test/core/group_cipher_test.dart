@@ -74,6 +74,48 @@ void main() {
     });
   });
 
+  group('GroupCipher — clearCache() (pure-Dart, no sodium)', () {
+    // HIGH-C2: clearCache must evict derivation entries and zero the SecureKey
+    // wrapper. Since we cannot call Argon2id/sodium without native libs, we
+    // verify the observable behaviour: calling clearCache on a fresh instance
+    // should not throw and should leave the cipher in a usable state.
+
+    test('clearCache on fresh instance does not throw', () {
+      final cipher = GroupCipher();
+      expect(() => cipher.clearCache(), returnsNormally);
+    });
+
+    test('clearCache can be called multiple times without error', () {
+      final cipher = GroupCipher();
+      cipher.clearCache();
+      cipher.clearCache();
+    });
+
+    test('encrypt returns null after clearCache when called with null key', () {
+      final cipher = GroupCipher();
+      cipher.clearCache();
+      expect(cipher.encrypt(Uint8List(16), null), isNull);
+    });
+
+    test('decrypt returns null after clearCache when called with null key', () {
+      final cipher = GroupCipher();
+      cipher.clearCache();
+      expect(cipher.decrypt(Uint8List(16), null), isNull);
+    });
+
+    test('encrypt passes additionalData parameter without crashing (null key → null)', () {
+      final cipher = GroupCipher();
+      final ad = Uint8List.fromList([0x02]); // MessageType.chat
+      expect(cipher.encrypt(Uint8List(16), null, additionalData: ad), isNull);
+    });
+
+    test('decrypt passes additionalData parameter without crashing (null key → null)', () {
+      final cipher = GroupCipher();
+      final ad = Uint8List.fromList([0x02]);
+      expect(cipher.decrypt(Uint8List(16), null, additionalData: ad), isNull);
+    });
+  });
+
   group('GroupCipher — sodium-dependent (contract/placeholder)', () {
     // NOTE: deriveGroupKey, generateGroupId, encrypt, decrypt all require
     // native sodium binaries. Full tests run as integration tests on a device.

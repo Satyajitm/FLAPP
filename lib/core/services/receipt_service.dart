@@ -104,7 +104,7 @@ class ReceiptService {
     var payload = BinaryProtocol.encodeBatchReceiptPayload(receipts);
 
     if (_groupManager.isInGroup) {
-      final encrypted = _groupManager.encryptForGroup(payload);
+      final encrypted = _groupManager.encryptForGroup(payload, messageType: MessageType.ack);
       if (encrypted != null) payload = encrypted;
     }
 
@@ -130,7 +130,7 @@ class ReceiptService {
 
     // Group-encrypt if in a group
     if (_groupManager.isInGroup) {
-      final encrypted = _groupManager.encryptForGroup(payload);
+      final encrypted = _groupManager.encryptForGroup(payload, messageType: MessageType.ack);
       if (encrypted != null) payload = encrypted;
     }
 
@@ -149,7 +149,7 @@ class ReceiptService {
 
     Uint8List payload = packet.payload;
     if (_groupManager.isInGroup) {
-      final decrypted = _groupManager.decryptFromGroup(payload);
+      final decrypted = _groupManager.decryptFromGroup(payload, messageType: MessageType.ack);
       if (decrypted == null) return;
       payload = decrypted;
     }

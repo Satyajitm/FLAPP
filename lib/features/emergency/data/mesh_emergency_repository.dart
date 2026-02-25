@@ -52,7 +52,7 @@ class MeshEmergencyRepository implements EmergencyRepository {
     // Decrypt with group key if in a group
     Uint8List rawPayload = packet.payload;
     if (_groupManager.isInGroup) {
-      final decrypted = _groupManager.decryptFromGroup(rawPayload);
+      final decrypted = _groupManager.decryptFromGroup(rawPayload, messageType: MessageType.emergencyAlert);
       if (decrypted == null) return; // Not in our group — drop
       rawPayload = decrypted;
     }
@@ -91,7 +91,7 @@ class MeshEmergencyRepository implements EmergencyRepository {
 
     // Encrypt with group key if in a group
     if (_groupManager.isInGroup) {
-      final encrypted = _groupManager.encryptForGroup(payload);
+      final encrypted = _groupManager.encryptForGroup(payload, messageType: MessageType.emergencyAlert);
       if (encrypted != null) payload = encrypted;
     }
 

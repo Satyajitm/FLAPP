@@ -42,9 +42,13 @@ class NoiseSession {
   }
 
   /// Encrypt a message for the remote peer.
+  ///
+  /// MED-C2: Increment the counter only after the encrypt call succeeds
+  /// so that a failed encryption doesn't advance the rekey threshold.
   Uint8List encrypt(Uint8List plaintext) {
+    final result = _sendCipher.encrypt(plaintext);
     _messagesSent++;
-    return _sendCipher.encrypt(plaintext);
+    return result;
   }
 
   /// Decrypt a message from the remote peer.

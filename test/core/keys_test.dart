@@ -2,6 +2,7 @@
 // Hex utility methods are tested directly. Crypto methods that require
 // sodium_libs are structured as integration test placeholders.
 
+import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -88,6 +89,51 @@ void main() {
       final hex = bytesToHex(peerId);
       expect(hex.length, equals(64));
       expect(hex, equals('a5' * 32));
+    });
+  });
+
+  // HIGH-C4: base64 storage + hex migration tests.
+  // These test the KeyStorage._decodeStoredKey / _isBase64 helpers indirectly
+  // through the pure-Dart logic. The actual storage round-trip tests require
+  // sodium + flutter_secure_storage and run as device integration tests.
+  // HIGH-C4: base64 storage + hex migration tests.
+  group('KeyStorage base64/hex migration (pure-Dart logic)', () {
+    test('base64Encode of 32 zero bytes produces a known string', () {
+      final key = Uint8List(32);
+      final encoded = base64Encode(key);
+      expect(encoded, equals('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='));
+    });
+
+    test('base64Decode round-trips with base64Encode for 32-byte key', () {
+      final key = Uint8List.fromList(List.generate(32, (i) => i));
+      final encoded = base64Encode(key);
+      final decoded = base64Decode(encoded);
+      expect(decoded, equals(key));
+    });
+
+    test('hex string for 32 bytes is 64 chars, base64 is shorter', () {
+      final key = Uint8List.fromList(List.generate(32, (i) => i));
+      final hex = key.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      final b64 = base64Encode(key);
+      expect(hex.length, equals(64));
+      expect(b64.length, lessThan(hex.length));
+    });
+
+    test('base64Decode throws FormatException for invalid base64', () {
+      // 'gg' is not valid base64 (must have 0 mod 4 padding).
+      expect(() => base64Decode('gg'), throwsFormatException);
+    });
+
+    test('base64 encoded key contains = padding character (distinguishable from hex)', () {
+      final key = Uint8List(32); // 32 zero bytes
+      final b64 = base64Encode(key);
+      // Base64 of a 32-byte key ends with '=' padding — hex never does.
+      expect(b64.endsWith('='), isTrue);
+    });
+
+    test('base64Encode/Decode is an identity for a 64-byte Ed25519 key', () {
+      final key = Uint8List.fromList(List.generate(64, (i) => (i * 3) & 0xFF));
+      expect(base64Decode(base64Encode(key)), equals(key));
     });
   });
 

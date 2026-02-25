@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../../shared/hex_utils.dart';
@@ -24,7 +25,7 @@ class KeyGenerator {
     return sodium.randombytes.buf(32);
   }
 
-  /// Derive a 32-byte peer ID from a public key (SHA-256 hash).
+  /// Derive a 32-byte peer ID from a public key (BLAKE2b-256 hash).
   static Uint8List derivePeerId(Uint8List publicKey) {
     final sodium = sodiumInstance;
     return sodium.crypto.genericHash(message: publicKey, outLen: 32);
@@ -49,7 +50,24 @@ class KeyStorage {
   KeyStorage({FlutterSecureStorage? storage})
       : _storage = storage ?? const FlutterSecureStorage();
 
+  /// HIGH-C4: Decode a stored key value.
+  ///
+  /// New keys are stored as base64. On load, try base64 first; if that fails
+  /// (FormatException), fall back to hex decode for backward-compat with old
+  /// installs, then re-save in base64 automatically.
+  Uint8List _decodeStoredKey(String value) {
+    try {
+      return base64Decode(value);
+    } on FormatException {
+      // Legacy hex-encoded key — decode and let the caller re-persist.
+      return HexUtils.decode(value);
+    }
+  }
+
   /// Store the static key pair in secure storage.
+  ///
+  /// HIGH-C4: Keys are now stored as base64, not hex, to reduce the length of
+  /// secrets stored in the OS keychain and remove hex as an attack surface.
   Future<void> storeStaticKeyPair({
     required Uint8List privateKey,
     required Uint8List publicKey,
@@ -57,11 +75,11 @@ class KeyStorage {
     await Future.wait([
       _storage.write(
         key: _staticPrivateKeyTag,
-        value: KeyGenerator.bytesToHex(privateKey),
+        value: base64Encode(privateKey),
       ),
       _storage.write(
         key: _staticPublicKeyTag,
-        value: KeyGenerator.bytesToHex(publicKey),
+        value: base64Encode(publicKey),
       ),
     ]);
   }
@@ -69,16 +87,44 @@ class KeyStorage {
   /// Load the static key pair from secure storage.
   ///
   /// Returns null if no key pair is stored.
+  /// HIGH-C4: Tries base64 first; migrates old hex-encoded entries on first load.
   Future<({Uint8List privateKey, Uint8List publicKey})?> loadStaticKeyPair() async {
-    final privateHex = await _storage.read(key: _staticPrivateKeyTag);
-    final publicHex = await _storage.read(key: _staticPublicKeyTag);
+    final privateRaw = await _storage.read(key: _staticPrivateKeyTag);
+    final publicRaw = await _storage.read(key: _staticPublicKeyTag);
 
-    if (privateHex == null || publicHex == null) return null;
+    if (privateRaw == null || publicRaw == null) return null;
 
-    return (
-      privateKey: KeyGenerator.hexToBytes(privateHex),
-      publicKey: KeyGenerator.hexToBytes(publicHex),
-    );
+    final privateKey = _decodeStoredKey(privateRaw);
+    final publicKey = _decodeStoredKey(publicRaw);
+
+    // Migrate legacy hex keys: re-save as base64 if the stored string is hex.
+    if (!_isBase64(privateRaw) || !_isBase64(publicRaw)) {
+      await storeStaticKeyPair(privateKey: privateKey, publicKey: publicKey);
+    }
+
+    return (privateKey: privateKey, publicKey: publicKey);
+  }
+
+  /// Returns true if [s] looks like a base64 string (no hex-only characters).
+  ///
+  /// A quick heuristic: base64 uses A-Z, a-z, 0-9, +, /, =.
+  /// A pure hex string only uses 0-9 and a-f. Checking for any character
+  /// outside the hex range is sufficient to distinguish them for our key sizes.
+  bool _isBase64(String s) {
+    // Base64 strings have length divisible by 4 (with padding) or contain +/=
+    // characters that hex strings never do.
+    return s.contains('+') || s.contains('/') || s.contains('=') ||
+        // Also consider that base64url (no padding) won't have = but will have
+        // uppercase letters beyond 'F'. Fallback: try to base64 decode.
+        (() {
+          try {
+            base64Decode(s);
+            // If the decoded length matches expected key size, it's base64.
+            return base64Decode(s).length <= 128; // all our keys ≤128 bytes
+          } catch (_) {
+            return false;
+          }
+        })();
   }
 
   /// Get or generate the static key pair.
@@ -104,6 +150,8 @@ class KeyStorage {
   }
 
   /// Store the Ed25519 signing key pair in secure storage.
+  ///
+  /// HIGH-C4: Keys stored as base64.
   Future<void> storeSigningKeyPair({
     required Uint8List privateKey,
     required Uint8List publicKey,
@@ -111,11 +159,11 @@ class KeyStorage {
     await Future.wait([
       _storage.write(
         key: _signingPrivateKeyTag,
-        value: KeyGenerator.bytesToHex(privateKey),
+        value: base64Encode(privateKey),
       ),
       _storage.write(
         key: _signingPublicKeyTag,
-        value: KeyGenerator.bytesToHex(publicKey),
+        value: base64Encode(publicKey),
       ),
     ]);
   }
@@ -123,16 +171,22 @@ class KeyStorage {
   /// Load the Ed25519 signing key pair from secure storage.
   ///
   /// Returns null if no key pair is stored.
+  /// HIGH-C4: Tries base64 first; migrates old hex-encoded entries on first load.
   Future<({Uint8List privateKey, Uint8List publicKey})?> loadSigningKeyPair() async {
-    final privateHex = await _storage.read(key: _signingPrivateKeyTag);
-    final publicHex = await _storage.read(key: _signingPublicKeyTag);
+    final privateRaw = await _storage.read(key: _signingPrivateKeyTag);
+    final publicRaw = await _storage.read(key: _signingPublicKeyTag);
 
-    if (privateHex == null || publicHex == null) return null;
+    if (privateRaw == null || publicRaw == null) return null;
 
-    return (
-      privateKey: KeyGenerator.hexToBytes(privateHex),
-      publicKey: KeyGenerator.hexToBytes(publicHex),
-    );
+    final privateKey = _decodeStoredKey(privateRaw);
+    final publicKey = _decodeStoredKey(publicRaw);
+
+    // Migrate legacy hex keys: re-save as base64 if the stored string is hex.
+    if (!_isBase64(privateRaw) || !_isBase64(publicRaw)) {
+      await storeSigningKeyPair(privateKey: privateKey, publicKey: publicKey);
+    }
+
+    return (privateKey: privateKey, publicKey: publicKey);
   }
 
   /// Get or generate the Ed25519 signing key pair.

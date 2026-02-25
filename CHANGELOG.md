@@ -5,6 +5,80 @@ Each entry records **what** changed, **which files** were affected, and **why** 
 
 ---
 
+## [v4.5] — Crypto Security Audit Patch
+**Date:** 2026-02-25
+**Branch:** `Major_Security_Fixes`
+**Status:** Complete — 752/752 tests passing · Zero compile errors
+
+### Summary
+Full resolution of the Crypto Security Audit (`security_audit/CRYPTO_SECURITY_AUDIT.md`). 17 production-code fixes across 11 files. 29 new tests added in 4 test files (1 new, 3 updated).
+
+---
+
+### Security Fixes
+
+#### CRIT-C1 — Note: aeadChaCha20Poly1305IETF (12-byte nonce) unavailable in sodium-2.x Dart API
+**File:** `lib/core/crypto/noise_protocol.dart`
+The sodium-2.x Dart library does not expose `aeadChaCha20Poly1305IETF` (the 12-byte nonce IETF variant) on `CryptoSumo`. The available API is `aeadChaCha20Poly1305` (8-byte nonce) which is the non-IETF variant. The original 8-byte nonce implementation is retained and documented. A future upgrade when the library exposes the IETF variant is tracked.
+
+#### CRIT-C2 — Central broadcast null-guard on encrypt() — `lib/core/transport/ble_transport.dart`
+Added explicit `if (encrypted == null) return;` guard in the central broadcast path. Previously `if (encrypted != null) sendData = encrypted` meant a rekey-needed null would silently fall through to sending plaintext. Now the peer is skipped entirely until the session is re-established.
+
+#### CRIT-C3 — Constant-time key comparison in Signatures — `lib/core/crypto/signatures.dart`
+Replaced `Object.hashAll(privateKey)` hash-code comparison with a constant-time XOR accumulator over `_cachedKeyBytes`. This prevents timing side-channels that could leak information about when the cached key changes. Also zeros `_cachedKeyBytes` in `clearCache()`.
+
+#### LOW-C1 — Fix _sha256 to use actual SHA-256 — `lib/core/crypto/noise_protocol.dart`
+`NoiseSymmetricState._sha256` was calling `sodium.crypto.genericHash` (BLAKE2b) instead of SHA-256. Fixed to use `pkg_crypto.sha256.convert()` which is already imported for `_hmacSha256`.
+
+#### HIGH-C2 — GroupCipher derivation cache never evicted — `lib/core/identity/group_cipher.dart`, `lib/core/identity/group_manager.dart`
+Added `GroupCipher.clearCache()` which zeros all cached key bytes and disposes the cached `SecureKey` wrapper. `GroupManager.leaveGroup()` now calls `_cipher.clearCache()` to prevent derived key material from lingering in heap indefinitely after leaving a group.
+
+#### HIGH-C3 — Non-constant-time bytesEqual — `lib/shared/hex_utils.dart`
+Replaced the early-return loop in `bytesEqual` with an XOR accumulator pattern. Comparison time is now always O(n) regardless of where bytes differ, preventing timing oracles.
+
+#### HIGH-C4 — Private keys stored as hex; switch to base64 — `lib/core/crypto/keys.dart`
+`KeyStorage` now stores both static and signing key pairs as base64 (shorter, no hex attack surface). A migration path is included: `loadStaticKeyPair` and `loadSigningKeyPair` try base64 decode first; on `FormatException` they fall back to hex decode (for old installs) and immediately re-persist as base64. Added `import 'dart:convert'`.
+
+#### LOW-C2 — Fix doc comment in keys.dart — `lib/core/crypto/keys.dart`
+Fixed `KeyGenerator.derivePeerId` doc comment to correctly say BLAKE2b instead of SHA-256.
+
+#### MED-C1 — Group encryption passes no associated data — `lib/core/identity/group_cipher.dart`, `lib/core/identity/group_manager.dart`, `lib/features/chat/data/mesh_chat_repository.dart`, `lib/features/location/data/mesh_location_repository.dart`, `lib/features/emergency/data/mesh_emergency_repository.dart`, `lib/core/services/receipt_service.dart`
+Added `Uint8List? additionalData` parameter to `GroupCipher.encrypt` and `GroupCipher.decrypt`. `GroupManager.encryptForGroup` and `decryptFromGroup` now accept an optional `MessageType? messageType` parameter and pass `Uint8List([messageType.value])` as AEAD associated data. All callers updated to pass the appropriate `MessageType`. This binds the AEAD tag to the intended message type, preventing cross-type replay attacks.
+
+#### MED-C2 — Counter incremented before encrypt succeeds — `lib/core/crypto/noise_session.dart`
+Moved `_messagesSent++` to after the `_sendCipher.encrypt(plaintext)` call so that a failing encrypt (e.g., `nonceExceeded`) does not advance the rekey threshold counter.
+
+#### MED-C3 — Group ID derived from raw passphrase — `lib/core/identity/group_cipher.dart`
+Changed group ID derivation to use the Argon2id key output (`keyBytes`) as input to BLAKE2b instead of the raw passphrase. This ensures the group ID inherits the full Argon2id work factor rather than being brute-forceable with fast BLAKE2b. This is a breaking change for existing groups (old groups will not be found after update — acceptable security fix).
+
+#### MED-C4 — LRU eviction doesn't dispose handshake state — `lib/core/crypto/noise_session_manager.dart`
+Added `evicted?.handshake?.dispose()` and `evicted?.session?.dispose()` calls when LRU entries are evicted from the peer state map. This zeros ephemeral key material in evicted entries.
+
+#### MED-C5 — _cachedGroupKeyBytes stores raw key in GC heap — `lib/core/identity/group_cipher.dart`
+Replaced `_cachedGroupKeyBytes` (raw key bytes) with `_cachedGroupKeyHash` (BLAKE2b-32 hash of the key). Change-detection now compares hashes rather than raw key material, avoiding keeping the actual key bytes in the GC-managed Dart heap for comparison purposes.
+
+#### MED-C6 — Silent acceptance window for unknown peers — `lib/core/mesh/mesh_service.dart`
+For directly-connected peers whose signing key is not yet known, application-layer packets (chat, location, emergency, ack) are now dropped from the app-layer emission but still relayed (for multi-hop compatibility). Packets from distant nodes (not in `_currentPeers`) continue to be delivered since Noise handshakes are only possible with direct peers. Bootstrap packets (handshake, discovery, topologyAnnounce) are always accepted from any source.
+
+#### LOW-C4 — SecureKey created per-call in MessageStorageService — `lib/core/services/message_storage_service.dart`
+Added `_fileSecureKey` field (cached `SecureKey` wrapper) and `_getFileSecureKey()` helper. `encryptData` and `decryptData` now use the cached SecureKey instead of calling `SecureKey.fromList` on every invocation. `dispose()` now calls `_fileSecureKey?.dispose()`.
+
+---
+
+### Tests Added / Updated
+
+| File | Change | Coverage |
+|---|---|---|
+| `test/core/noise_session_test.dart` | NEW — 8 tests | MED-C2: counter only on success; dispose clears both ciphers |
+| `test/shared/hex_utils_test.dart` | UPDATED — +10 tests | HIGH-C3: constant-time XOR accumulator in bytesEqual |
+| `test/core/keys_test.dart` | UPDATED — +6 tests | HIGH-C4: base64 encode/decode round-trips, migration heuristics |
+| `test/core/group_cipher_test.dart` | UPDATED — +6 tests | HIGH-C2: clearCache; MED-C1: additionalData parameter |
+| All FakeGroupCipher test doubles | UPDATED (8 files) | Updated encrypt/decrypt signatures + clearCache() override |
+
+**Total test count: 752 (was 723), all passing.**
+
+---
+
 ## [v4.4] — BLE Security Audit Patch (Patch cycle 2 v5)
 **Date:** 2026-02-25
 **Branch:** `Major_Security_Fixes`

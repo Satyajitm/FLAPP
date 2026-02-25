@@ -3,6 +3,67 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:fluxon_app/shared/hex_utils.dart';
 
 void main() {
+  // HIGH-C3: Constant-time comparison tests.
+  group('bytesEqual — constant-time XOR accumulator', () {
+    test('equal slices return true', () {
+      final a = Uint8List.fromList([0x01, 0x02, 0x03]);
+      final b = Uint8List.fromList([0x01, 0x02, 0x03]);
+      expect(bytesEqual(a, b), isTrue);
+    });
+
+    test('slices differing in first byte return false', () {
+      final a = Uint8List.fromList([0xFF, 0x02, 0x03]);
+      final b = Uint8List.fromList([0x00, 0x02, 0x03]);
+      expect(bytesEqual(a, b), isFalse);
+    });
+
+    test('slices differing only in last byte return false', () {
+      final a = Uint8List.fromList([0x01, 0x02, 0xFF]);
+      final b = Uint8List.fromList([0x01, 0x02, 0x00]);
+      expect(bytesEqual(a, b), isFalse);
+    });
+
+    test('different lengths return false without comparing bytes', () {
+      final a = Uint8List.fromList([0x01, 0x02]);
+      final b = Uint8List.fromList([0x01, 0x02, 0x03]);
+      expect(bytesEqual(a, b), isFalse);
+    });
+
+    test('empty slices are equal', () {
+      expect(bytesEqual(Uint8List(0), Uint8List(0)), isTrue);
+    });
+
+    test('all-zero slices are equal', () {
+      final a = Uint8List(16);
+      final b = Uint8List(16);
+      expect(bytesEqual(a, b), isTrue);
+    });
+
+    test('all-0xFF slices are equal', () {
+      final a = Uint8List(16)..fillRange(0, 16, 0xFF);
+      final b = Uint8List(16)..fillRange(0, 16, 0xFF);
+      expect(bytesEqual(a, b), isTrue);
+    });
+
+    test('slices differing in middle byte return false', () {
+      final a = Uint8List.fromList([0x01, 0xFF, 0x03]);
+      final b = Uint8List.fromList([0x01, 0x00, 0x03]);
+      expect(bytesEqual(a, b), isFalse);
+    });
+
+    test('single-byte equal', () {
+      final a = Uint8List.fromList([0xAB]);
+      final b = Uint8List.fromList([0xAB]);
+      expect(bytesEqual(a, b), isTrue);
+    });
+
+    test('single-byte different', () {
+      final a = Uint8List.fromList([0xAB]);
+      final b = Uint8List.fromList([0xAC]);
+      expect(bytesEqual(a, b), isFalse);
+    });
+  });
+
   group('HexUtils', () {
     group('encode', () {
       test('encodes known bytes to lowercase hex', () {

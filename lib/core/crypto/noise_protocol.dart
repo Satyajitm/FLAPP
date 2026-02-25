@@ -65,6 +65,9 @@ class NoiseCipherState {
   /// Reusable 8-byte nonce buffer — avoids allocating a new Uint8List on
   /// every encrypt/decrypt call (safe because Dart is single-threaded and
   /// libsodium copies the nonce before returning).
+  /// NOTE: sodium-2.x only exposes aeadChaCha20Poly1305 (8-byte non-IETF nonce)
+  /// at the Dart API level. The aeadChaCha20Poly1305IETF (12-byte) C function
+  /// is not separately wrapped. We continue to use the 8-byte variant.
   final Uint8List _nonceBuffer = Uint8List(8);
   late final ByteData _nonceBufferData = ByteData.sublistView(_nonceBuffer);
 
@@ -92,7 +95,7 @@ class NoiseCipherState {
 
     final currentNonce = _nonce;
 
-    // Build 8-byte nonce: big-endian counter (original ChaCha20-Poly1305)
+    // Build 8-byte nonce: big-endian counter for aeadChaCha20Poly1305.
     _nonceBufferData.setUint64(0, currentNonce, Endian.big);
 
     final sodium = sodiumInstance;
@@ -143,7 +146,7 @@ class NoiseCipherState {
       actualCiphertext = ciphertext;
     }
 
-    // Build 8-byte nonce: big-endian counter (original ChaCha20-Poly1305)
+    // Build 8-byte nonce: big-endian counter for aeadChaCha20Poly1305.
     _nonceBufferData.setUint64(0, decryptionNonce, Endian.big);
 
     final sodium = sodiumInstance;
@@ -340,9 +343,11 @@ class NoiseSymmetricState {
     return Uint8List.fromList(digest.bytes);
   }
 
+  /// LOW-C1: Use actual SHA-256 (not BLAKE2b) as required by the Noise spec.
+  /// pkg_crypto.sha256 is already imported for HMAC-SHA256.
   Uint8List _sha256(Uint8List data) {
-    final sodium = sodiumInstance;
-    return sodium.crypto.genericHash(message: data, outLen: 32);
+    final digest = pkg_crypto.sha256.convert(data);
+    return Uint8List.fromList(digest.bytes);
   }
 }
 

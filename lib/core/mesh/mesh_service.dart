@@ -180,10 +180,10 @@ class MeshService implements Transport {
   // ---------------------------------------------------------------------------
 
   void _onPacketReceived(FluxonPacket packet) {
-    // Enforce Ed25519 signature verification for non-handshake packets.
-    // Handshake packets are exempt because the signing key is exchanged during
-    // the handshake itself.
-    if (packet.type != MessageType.handshake) {
+    // Determine whether this packet has a valid signature.
+    // Handshake packets are exempt (signing key is exchanged during handshake).
+    bool verified = packet.type == MessageType.handshake;
+    if (!verified) {
       final signingKey = _peerSigningKeys[HexUtils.encode(packet.sourceId)];
       if (signingKey != null) {
         // We know this peer's signing key — the packet MUST carry a valid signature.
@@ -192,7 +192,7 @@ class MeshService implements Transport {
             'Packet from ${HexUtils.encode(packet.sourceId)} has no signature but signing key is known — dropping',
             category: _cat,
           );
-          return; // Drop unsigned packet from known peer
+          return; // Drop unsigned packet from known peer entirely (no relay)
         }
         final valid = Signatures.verify(
           packet.encode(),
@@ -204,22 +204,13 @@ class MeshService implements Transport {
             'Packet from ${HexUtils.encode(packet.sourceId)} has invalid signature — dropping',
             category: _cat,
           );
-          return; // Drop forged packet
+          return; // Drop forged packet entirely (no relay)
         }
-      } else {
-        // CRIT-3 (partial mitigation): Signing key not yet available.
-        // Note: for multi-hop relay, packets from distant nodes legitimately
-        // arrive before their signing key is cached. BleTransport already
-        // enforces that DIRECT connections without Noise sessions are rejected
-        // (see BleTransport C4). Here we log and accept provisionally for
-        // relay compatibility. Once the signing key is learned (via handshake
-        // or topology announce), all subsequent packets from this source are
-        // fully verified.
-        SecureLogger.debug(
-          'Accepting ${packet.type.name} from unverified peer provisionally',
-          category: _cat,
-        );
+        verified = true;
       }
+      // If signing key not yet known: we still relay (multi-hop requirement)
+      // but we do NOT emit to the application layer for non-bootstrap types.
+      // This is MED-C6: unverified app-layer data is not delivered to repositories.
     }
 
     // Feed to gossip sync for gap-filling bookkeeping.
@@ -231,6 +222,28 @@ class MeshService implements Transport {
       _handleTopologyPacket(packet);
       _maybeRelay(packet);
       return;
+    }
+
+    // MED-C6: Drop application-layer packets from *directly connected* peers
+    // whose signing key is not yet known. Multi-hop relayed packets (where the
+    // source peer is not in our direct-connection list) are still delivered
+    // because we cannot do a Noise handshake with distant nodes.
+    if (!verified) {
+      final sourceIdHex = HexUtils.encode(packet.sourceId);
+      final isDirectPeer = _currentPeers.any((p) => p.peerIdHex == sourceIdHex);
+      if (isDirectPeer) {
+        SecureLogger.debug(
+          'Dropping ${packet.type.name} from unverified direct peer (no signing key yet)',
+          category: _cat,
+        );
+        _maybeRelay(packet); // Still relay — TTL will expire naturally
+        return;
+      }
+      // Not a direct peer: allow delivery (relayed packet from distant node).
+      SecureLogger.debug(
+        'Accepting relayed ${packet.type.name} from unknown distant peer provisionally',
+        category: _cat,
+      );
     }
 
     // Application-layer packet: emit to feature repositories.

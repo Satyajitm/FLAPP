@@ -66,9 +66,12 @@ class NoiseSessionManager {
     final state = existing ?? _PeerState();
     _peers[deviceId] = state;
 
-    // Evict oldest entry if over the limit.
+    // MED-C4: Evict oldest entry if over the limit, disposing crypto state.
     while (_peers.length > _maxPeers) {
-      _peers.remove(_peers.keys.first);
+      final evictedKey = _peers.keys.first;
+      final evicted = _peers.remove(evictedKey);
+      evicted?.handshake?.dispose();
+      evicted?.session?.dispose();
     }
 
     return state;
