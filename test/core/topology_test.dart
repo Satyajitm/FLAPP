@@ -6,8 +6,10 @@ void main() {
   group('TopologyTracker', () {
     late TopologyTracker tracker;
 
+    // L2: _sanitize now requires exactly 32 bytes — all test peer IDs must be
+    // 32 bytes.
     Uint8List peerId(int value) {
-      final id = Uint8List(8);
+      final id = Uint8List(32);
       id[0] = value;
       return id;
     }
@@ -227,31 +229,62 @@ void main() {
       expect(tracker.nodeCount, equals(2));
     });
 
-    test('undersized peer ID is padded to 32 bytes', () {
-      // peerId helper creates 8-byte IDs which get padded by _sanitize
-      final a = peerId(1); // 8 bytes
-      final b = peerId(2); // 8 bytes
+    // -------------------------------------------------------------------------
+    // L2 — _sanitize rejects any peer ID that is not exactly 32 bytes
+    // -------------------------------------------------------------------------
+    test('L2: undersized peer ID (8 bytes) is rejected — no topology entry created',
+        () {
+      // After L2 fix _sanitize returns null for any length != routingIdSize (32).
+      final a = Uint8List(8)..[0] = 0x01; // 8 bytes — should be rejected
+      final b = Uint8List(32)..fillRange(0, 32, 0x02); // valid 32-byte ID
 
       tracker.updateNeighbors(source: a, neighbors: [b]);
-      tracker.updateNeighbors(source: b, neighbors: [a]);
-
-      final route = tracker.computeRoute(start: a, goal: b);
-      expect(route, isNotNull);
-      expect(route, isEmpty); // Direct connection
+      // updateNeighbors returns immediately when _sanitize(source) returns null
+      expect(tracker.nodeCount, equals(0),
+          reason: 'Undersized source ID must be rejected');
     });
 
-    test('oversized peer ID is truncated to 32 bytes', () {
+    test('L2: oversized peer ID (64 bytes) is rejected — no topology entry created',
+        () {
       final longId = Uint8List(64)..fillRange(0, 64, 0x01);
-      final shortId = Uint8List(32)..fillRange(0, 32, 0x01);
-      final b = peerId(2);
+      final b = Uint8List(32)..fillRange(0, 32, 0x02);
 
-      // Both should sanitize to the same 32-byte ID
       tracker.updateNeighbors(source: longId, neighbors: [b]);
-      tracker.updateNeighbors(source: b, neighbors: [shortId]);
+      expect(tracker.nodeCount, equals(0),
+          reason: 'Oversized source ID must be rejected');
+    });
 
-      final route = tracker.computeRoute(start: longId, goal: b);
-      expect(route, isNotNull);
-      expect(route, isEmpty);
+    test('L2: exact 32-byte peer ID is accepted', () {
+      final a = Uint8List(32)..fillRange(0, 32, 0x01);
+      final b = Uint8List(32)..fillRange(0, 32, 0x02);
+
+      tracker.updateNeighbors(source: a, neighbors: [b]);
+      expect(tracker.nodeCount, equals(1));
+    });
+
+    test('L2: computeRoute returns null for undersized start ID (not 32 bytes)', () {
+      final a = Uint8List(8)..fillRange(0, 8, 0x01); // 8 bytes — rejected
+      final b = Uint8List(32)..fillRange(0, 32, 0x02);
+      final route = tracker.computeRoute(start: a, goal: b);
+      expect(route, isNull);
+    });
+
+    test('L2: computeRoute returns null for oversized goal ID', () {
+      final a = Uint8List(32)..fillRange(0, 32, 0x01);
+      final b = Uint8List(64)..fillRange(0, 64, 0x02); // 64 bytes
+      final route = tracker.computeRoute(start: a, goal: b);
+      expect(route, isNull);
+    });
+
+    test('L2: 32-byte neighbor IDs are accepted, non-32-byte ones are silently skipped',
+        () {
+      final a = Uint8List(32)..fillRange(0, 32, 0x01);
+      final validNeighbor = Uint8List(32)..fillRange(0, 32, 0x02);
+      final invalidNeighbor = Uint8List(8)..fillRange(0, 8, 0x03);
+
+      tracker.updateNeighbors(source: a, neighbors: [validNeighbor, invalidNeighbor]);
+      // Source is valid so it should be stored; invalid neighbor should be dropped.
+      expect(tracker.nodeCount, equals(1));
     });
 
     test('empty source Uint8List is rejected', () {

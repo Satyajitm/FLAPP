@@ -35,10 +35,16 @@ class MessageDeduplicator {
   }
 
   /// Record an ID with a specific timestamp (for content key tracking).
+  ///
+  /// M3: The [timestamp] is stored in [_lookup] for external callers via
+  /// [timestampFor], but the backing [_entries] list uses the actual wall-clock
+  /// insertion time so that [_cleanupOldEntries] (which is age-based) works
+  /// correctly even when the caller supplies an old or out-of-order timestamp.
   void record(String id, DateTime timestamp) {
     if (!_lookup.containsKey(id)) {
-      _entries.add(_Entry(id: id, timestamp: timestamp));
-      _lookup[id] = timestamp;
+      final insertedAt = DateTime.now();
+      _entries.add(_Entry(id: id, timestamp: insertedAt));
+      _lookup[id] = timestamp; // preserve caller's timestamp for timestampFor()
     }
     _trimIfNeeded();
   }
@@ -101,7 +107,7 @@ class MessageDeduplicator {
   /// Extracted from both [_trimIfNeeded] and [_cleanupOldEntries] to avoid
   /// duplicating the same logic in two places.
   void _compactIfNeeded() {
-    if (_head > 0 && _head > _entries.length ~/ 4) {
+    if (_head > 0 && _head >= _entries.length ~/ 4) {
       _entries.removeRange(0, _head);
       _head = 0;
     }

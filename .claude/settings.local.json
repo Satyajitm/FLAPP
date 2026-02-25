@@ -29,7 +29,8 @@
       "mcp__plugin_playwright_playwright__browser_snapshot",
       "mcp__plugin_playwright_playwright__browser_type",
       "mcp__plugin_playwright_playwright__browser_network_requests",
-      "Bash(dart pub:*)"
+      "Bash(dart pub:*)",
+      "mcp__sequential-thinking__sequentialthinking"
     ]
   }
 }

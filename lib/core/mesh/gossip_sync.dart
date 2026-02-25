@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:typed_data';
 import '../../shared/hex_utils.dart';
+import '../protocol/message_types.dart';
 import '../protocol/packet.dart';
 import '../transport/transport.dart';
 
@@ -44,8 +45,23 @@ class GossipSyncManager {
     _maintenanceTimer = null;
   }
 
+  /// H1: Packet types that should NOT be stored in gossip sync.
+  /// Replaying handshake/encrypted/ack/ping/pong packets is harmful
+  /// (stale crypto state, bandwidth waste) so we filter them out.
+  static const _skipTypes = {
+    MessageType.handshake,
+    MessageType.noiseEncrypted,
+    MessageType.ack,
+    MessageType.ping,
+    MessageType.pong,
+    MessageType.gossipSync,
+  };
+
   /// Record a packet we've seen (either originated or received).
   void onPacketSeen(FluxonPacket packet) {
+    // H1: Skip mesh-internal and session-layer packet types.
+    if (_skipTypes.contains(packet.type)) return;
+
     final id = packet.packetId;
     if (_seenPackets.containsKey(id)) return;
 
@@ -87,6 +103,9 @@ class GossipSyncManager {
       rateState.windowStart = now;
     }
 
+    // H2: If this peer has already consumed the full window budget, refuse.
+    if (rateState.count >= config.maxSyncPacketsPerRequest) return;
+
     int sent = 0;
     for (final entry in _seenPackets.entries) {
       if (sent >= config.maxSyncPacketsPerRequest) break;
@@ -110,7 +129,8 @@ class GossipSyncManager {
   }
 
   void _cleanupExpired() {
-    final cutoff = DateTime.now().subtract(
+    final now = DateTime.now();
+    final cutoff = now.subtract(
       Duration(seconds: config.maxMessageAgeSeconds),
     );
     _packetOrder.removeWhere((id) {
@@ -121,6 +141,11 @@ class GossipSyncManager {
       }
       return false;
     });
+
+    // M2: Purge stale per-peer rate-limit windows (older than 60 seconds).
+    _syncRateByPeer.removeWhere(
+      (_, state) => now.difference(state.windowStart).inSeconds >= 60,
+    );
   }
 
   /// Reset all state.

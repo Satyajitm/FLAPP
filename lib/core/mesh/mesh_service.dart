@@ -11,6 +11,7 @@ import '../protocol/message_types.dart';
 import '../protocol/packet.dart';
 import '../transport/transport.dart';
 import '../transport/transport_config.dart';
+import 'deduplicator.dart';
 import 'gossip_sync.dart';
 import 'relay_controller.dart';
 import 'topology_tracker.dart';
@@ -50,6 +51,12 @@ class MeshService implements Transport {
   /// LRU-ordered (LinkedHashMap insertion order): oldest entry is evicted when limit exceeded.
   final LinkedHashMap<String, Uint8List> _peerSigningKeys = LinkedHashMap();
   static const _maxPeerSigningKeys = 500;
+
+  /// M1: Packet-level deduplicator — drops packets already seen at the mesh layer.
+  final MessageDeduplicator _meshDedup = MessageDeduplicator(
+    maxAge: const Duration(seconds: 300),
+    maxCount: 1000,
+  );
 
   static const _cat = 'Mesh';
 
@@ -180,6 +187,11 @@ class MeshService implements Transport {
   // ---------------------------------------------------------------------------
 
   void _onPacketReceived(FluxonPacket packet) {
+    // M1: Drop packets already seen at the mesh layer (deduplication).
+    if (_meshDedup.isDuplicate(packet.packetId)) {
+      return;
+    }
+
     // Determine whether this packet has a valid signature.
     // Handshake packets are exempt (signing key is exchanged during handshake).
     bool verified = packet.type == MessageType.handshake;
@@ -216,10 +228,20 @@ class MeshService implements Transport {
     // Feed to gossip sync for gap-filling bookkeeping.
     _gossipSync.onPacketSeen(packet);
 
-    // Mesh-internal packet types: update topology, relay, but don't emit.
+    // C1: Mesh-internal packet types: update topology only from verified peers.
+    // Unverified discovery/topology packets are relayed (TTL will expire)
+    // but must NOT influence our topology state to prevent poisoning.
     if (packet.type == MessageType.discovery ||
         packet.type == MessageType.topologyAnnounce) {
-      _handleTopologyPacket(packet);
+      if (verified) {
+        _handleTopologyPacket(packet);
+      } else {
+        SecureLogger.debug(
+          'Dropping topology/discovery update from unverified peer '
+          '${HexUtils.encode(packet.sourceId).substring(0, 8)}…',
+          category: _cat,
+        );
+      }
       _maybeRelay(packet);
       return;
     }
@@ -371,7 +393,9 @@ class MeshService implements Transport {
       payload: payload,
       ttl: FluxonPacket.maxTTL,
     );
-    await _rawTransport.broadcastPacket(packet);
+    // C3: Use MeshService.broadcastPacket (self) so the packet is signed
+    // with our Ed25519 key before going on the wire.
+    await broadcastPacket(packet);
   }
 
 }

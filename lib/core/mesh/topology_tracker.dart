@@ -180,19 +180,16 @@ class TopologyTracker {
   int get nodeCount => _claims.length;
 
   /// Sanitize a peer ID to a fixed-size routing ID (hex string).
+  ///
+  /// L2: Rejects any peer ID that is not exactly [routingIdSize] bytes.
+  /// Previously, undersized IDs were zero-padded and oversized IDs were
+  /// truncated; both allowed spoofing / ambiguous identities.
   String? _sanitize(Uint8List? data) {
     if (data == null || data.isEmpty) return null;
 
-    Uint8List normalized;
-    if (data.length > routingIdSize) {
-      normalized = Uint8List.sublistView(data, 0, routingIdSize);
-    } else if (data.length < routingIdSize) {
-      normalized = Uint8List(routingIdSize);
-      normalized.setAll(0, data);
-    } else {
-      normalized = data;
-    }
+    // L2: Exact-size enforcement — reject IDs that are not exactly 32 bytes.
+    if (data.length != routingIdSize) return null;
 
-    return HexUtils.encode(normalized);
+    return HexUtils.encode(data);
   }
 }

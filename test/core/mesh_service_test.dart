@@ -259,7 +259,11 @@ void main() {
   });
 
   group('MeshService topology', () {
-    test('discovery packet updates topology tracker', () async {
+    test('discovery packet from unverified peer does NOT update topology (C1 fix)',
+        () async {
+      // C1: Unverified discovery packets must not influence topology state to
+      // prevent topology poisoning. A peer without a registered signing key is
+      // treated as unverified.
       final remotePeer = makePeerId(0xBB);
       final neighborC = makePeerId(0xCC);
 
@@ -274,8 +278,8 @@ void main() {
       rawTransport.simulateIncomingPacket(packet);
       await Future.delayed(const Duration(milliseconds: 50));
 
-      // Topology should now know about remotePeer
-      expect(meshService.topology.nodeCount, greaterThanOrEqualTo(1));
+      // After C1 fix: topology must NOT be updated from unverified peer.
+      expect(meshService.topology.nodeCount, equals(0));
     });
 
     test('new peer connection triggers discovery announce', () async {
@@ -430,7 +434,10 @@ void main() {
   });
 
   group('MeshService topology (extended)', () {
-    test('topologyAnnounce packet also updates topology tracker', () async {
+    test('topologyAnnounce from unverified peer does NOT update topology (C1 fix)',
+        () async {
+      // C1: Same as discovery — unverified topologyAnnounce must be dropped
+      // from the topology state machine.
       final remotePeer = makePeerId(0xBB);
       final neighborC = makePeerId(0xCC);
 
@@ -445,7 +452,8 @@ void main() {
       rawTransport.simulateIncomingPacket(packet);
       await Future.delayed(const Duration(milliseconds: 50));
 
-      expect(meshService.topology.nodeCount, greaterThanOrEqualTo(1));
+      // After C1 fix: topology must NOT be updated from unverified peer.
+      expect(meshService.topology.nodeCount, equals(0));
     });
 
     test('malformed discovery payload is silently dropped', () async {

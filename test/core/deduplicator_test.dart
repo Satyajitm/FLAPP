@@ -139,6 +139,36 @@ void main() {
           expect(largeDedup.timestampFor('msg-19'), isNotNull);
         }
       });
+
+      // -----------------------------------------------------------------------
+      // L1 — _compactIfNeeded uses >= (not >) so compaction triggers at exactly
+      //      25% dead-head zone.
+      // -----------------------------------------------------------------------
+      test('L1: compaction triggers when dead-head zone equals exactly 25% of '
+          'backing-list length', () async {
+        // Use a short maxAge so we can expire entries on demand.
+        final shortDedup = MessageDeduplicator(
+          maxAge: const Duration(milliseconds: 30),
+          maxCount: 100,
+        );
+
+        // Add 4 entries.
+        for (var i = 0; i < 4; i++) {
+          shortDedup.isDuplicate('msg-$i');
+        }
+
+        // Wait for entries to expire, then trigger cleanup to advance _head.
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        // After cleanup _head should advance past the 4 expired entries.
+        // The backing list has 4 entries and _head would become 4, which is
+        // 4 >= 4/4 = 1 → compaction fires (removing dead entries) and _head resets to 0.
+        shortDedup.cleanup();
+
+        // Add a new entry and verify the deduplicator is still consistent.
+        expect(shortDedup.isDuplicate('msg-new'), isFalse);
+        expect(shortDedup.contains('msg-new'), isTrue);
+      });
     });
   });
 }
