@@ -298,6 +298,40 @@ void main() {
       );
     });
 
+    test(
+        'second call when available packets < limit still respects accumulated budget',
+        () async {
+      // With limit=2 and only 1 packet available, two calls should together
+      // send at most 2 packets total, not 1+1=2 bypassing the window budget
+      // via the local `sent` counter reset.
+      gossip = GossipSyncManager(
+        myPeerId: makePeerId(0xAA),
+        transport: transport,
+        config: const GossipSyncConfig(maxSyncPacketsPerRequest: 3),
+      );
+
+      // Only 2 packets available (< limit of 3)
+      for (var i = 1; i <= 2; i++) {
+        gossip.onPacketSeen(
+          buildPacket(type: MessageType.chat, sourceId: makePeerId(i)),
+        );
+      }
+
+      await gossip.handleSyncRequest(fromPeerId: remotePeer, peerHasIds: {});
+      final afterFirst = transport.sentPackets.length; // 2 sent, count=2
+      expect(afterFirst, equals(2));
+
+      // Second call: count=2, limit=3, so budget has 1 left. Only 1 more sent.
+      await gossip.handleSyncRequest(fromPeerId: remotePeer, peerHasIds: {});
+      // But peerHasIds is empty again and same packets exist — count would reach 3, not 4.
+      // Key: total must not exceed maxSyncPacketsPerRequest (3).
+      expect(
+        transport.sentPackets.length,
+        lessThanOrEqualTo(3),
+        reason: 'Budget must be shared across calls in the same window',
+      );
+    });
+
     test('different peer has independent budget', () async {
       final anotherPeer = makePeerId(0xCC);
       for (var i = 1; i <= 4; i++) {

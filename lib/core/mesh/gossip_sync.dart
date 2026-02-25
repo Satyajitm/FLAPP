@@ -106,14 +106,16 @@ class GossipSyncManager {
     // H2: If this peer has already consumed the full window budget, refuse.
     if (rateState.count >= config.maxSyncPacketsPerRequest) return;
 
-    int sent = 0;
     for (final entry in _seenPackets.entries) {
-      if (sent >= config.maxSyncPacketsPerRequest) break;
+      // Use rateState.count (persists across calls) not a local counter that
+      // resets to 0 each call — otherwise the budget is only enforced after
+      // the loop has sent a full window's worth in a single call, allowing
+      // multiple under-full calls to bypass the cap.
+      if (rateState.count >= config.maxSyncPacketsPerRequest) break;
       if (peerHasIds.contains(entry.key)) continue;
       if (entry.value.seenAt.isBefore(cutoff)) continue;
 
       rateState.count++;
-      sent++;
 
       // Send missing packet to the requesting peer
       final packet = entry.value.packet.withDecrementedTTL();
