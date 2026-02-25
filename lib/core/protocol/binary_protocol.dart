@@ -131,7 +131,14 @@ class BinaryProtocol {
     final longitude = buffer.getFloat64(9);
     final msgLen = buffer.getUint16(17);
     if (data.length < 19 + msgLen) return null;
-    final message = utf8.decode(data.sublist(19, 19 + msgLen), allowMalformed: true);
+    // INFO-N1: Use allowMalformed: false to reject malformed UTF-8 sequences
+    // that could enable homoglyph or encoding-confusion attacks in emergency messages.
+    final String message;
+    try {
+      message = utf8.decode(data.sublist(19, 19 + msgLen), allowMalformed: false);
+    } on FormatException {
+      return null; // Reject packets with malformed UTF-8 in the message field.
+    }
     return EmergencyPayload(
       alertType: alertType,
       latitude: latitude,

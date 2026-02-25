@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
@@ -29,16 +30,18 @@ class GroupStorage {
     required DateTime createdAt,
     required Uint8List salt,
   }) async {
-    final keyHex = _toHex(groupKey);
-    final saltHex = _toHex(salt);
-    await _storage.write(key: _groupKeyTag, value: keyHex);
+    // MED-N3: Store as base64 (consistent with KeyStorage) — smaller than hex
+    // and fewer intermediate string objects in GC heap.
+    final keyB64 = base64Encode(groupKey);
+    final saltB64 = base64Encode(salt);
+    await _storage.write(key: _groupKeyTag, value: keyB64);
     await _storage.write(key: _groupIdTag, value: groupId);
     await _storage.write(key: _nameTag, value: name);
     await _storage.write(
       key: _createdAtTag,
       value: createdAt.toIso8601String(),
     );
-    await _storage.write(key: _saltTag, value: saltHex);
+    await _storage.write(key: _saltTag, value: saltB64);
   }
 
   /// Load a previously saved group, or null if none exists.
@@ -50,26 +53,26 @@ class GroupStorage {
         DateTime createdAt,
         Uint8List salt,
       })?> loadGroup() async {
-    final keyHex = await _storage.read(key: _groupKeyTag);
+    final keyStr = await _storage.read(key: _groupKeyTag);
     final groupId = await _storage.read(key: _groupIdTag);
     final name = await _storage.read(key: _nameTag);
     final createdAtStr = await _storage.read(key: _createdAtTag);
-    final saltHex = await _storage.read(key: _saltTag);
+    final saltStr = await _storage.read(key: _saltTag);
 
-    if (keyHex == null ||
+    if (keyStr == null ||
         groupId == null ||
         name == null ||
         createdAtStr == null ||
-        saltHex == null) {
+        saltStr == null) {
       return null;
     }
 
     return (
-      groupKey: _fromHex(keyHex),
+      groupKey: _decodeBytes(keyStr),
       groupId: groupId,
       name: name,
       createdAt: DateTime.parse(createdAtStr),
-      salt: _fromHex(saltHex),
+      salt: _decodeBytes(saltStr),
     );
   }
 
@@ -86,13 +89,20 @@ class GroupStorage {
   // Internal helpers
   // ---------------------------------------------------------------------------
 
-  static String _toHex(Uint8List bytes) =>
-      bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-
-  static Uint8List _fromHex(String hex) => Uint8List.fromList(
+  /// Decode bytes from either base64 (current format) or legacy hex.
+  ///
+  /// MED-N3: Provides backward compatibility with devices that stored keys
+  /// as hex before the migration to base64.
+  static Uint8List _decodeBytes(String s) {
+    // A pure hex string contains only [0-9a-fA-F] and has even length.
+    if (s.isNotEmpty && s.length.isEven && RegExp(r'^[0-9a-fA-F]+$').hasMatch(s)) {
+      return Uint8List.fromList(
         List.generate(
-          hex.length ~/ 2,
-          (i) => int.parse(hex.substring(i * 2, i * 2 + 2), radix: 16),
+          s.length ~/ 2,
+          (i) => int.parse(s.substring(i * 2, i * 2 + 2), radix: 16),
         ),
       );
+    }
+    return base64Decode(s);
+  }
 }

@@ -49,18 +49,26 @@ class MessageStorageService {
 
     final stored = await _secureStorage.read(key: _fileKeyStorageKey);
     if (stored != null) {
-      // Decode stored hex key.
-      final bytes = Uint8List(stored.length ~/ 2);
-      for (var i = 0; i < bytes.length; i++) {
-        bytes[i] = int.parse(stored.substring(i * 2, i * 2 + 2), radix: 16);
+      // LOW-N2: Support both legacy hex (64 chars) and current base64 encoding.
+      // Hex detection: all chars in [0-9a-fA-F] and even length.
+      Uint8List bytes;
+      if (stored.length == 64 && RegExp(r'^[0-9a-fA-F]+$').hasMatch(stored)) {
+        // Legacy hex — decode and migrate to base64 on next save.
+        bytes = Uint8List(32);
+        for (var i = 0; i < 32; i++) {
+          bytes[i] = int.parse(stored.substring(i * 2, i * 2 + 2), radix: 16);
+        }
+        // Migrate to base64 immediately so future reads use the smaller format.
+        await _secureStorage.write(key: _fileKeyStorageKey, value: base64Encode(bytes));
+      } else {
+        bytes = base64Decode(stored);
       }
       _fileEncryptionKey = bytes;
     } else {
-      // Generate a new random 32-byte file encryption key.
+      // Generate a new random 32-byte file encryption key stored as base64.
       final sodium = sodiumInstance;
       final key = sodium.randombytes.buf(sodium.crypto.aeadXChaCha20Poly1305IETF.keyBytes);
-      final hex = key.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-      await _secureStorage.write(key: _fileKeyStorageKey, value: hex);
+      await _secureStorage.write(key: _fileKeyStorageKey, value: base64Encode(key));
       _fileEncryptionKey = key;
     }
 

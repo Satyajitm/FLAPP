@@ -256,6 +256,16 @@ class NoiseSymmetricState {
 
   Uint8List get handshakeHash => Uint8List.fromList(_hash);
 
+  /// MED-N4: Zero handshake chaining key and hash on failure paths.
+  ///
+  /// Called from [NoiseHandshakeState.dispose] to clear intermediate key
+  /// material that is not zeroed by the normal [split] success path.
+  void dispose() {
+    _chainingKey.fillRange(0, _chainingKey.length, 0);
+    _hash.fillRange(0, _hash.length, 0);
+    _cipherState.clear();
+  }
+
   void mixKey(Uint8List inputKeyMaterial) {
     final output = _hkdf(_chainingKey, inputKeyMaterial, 2);
     _chainingKey = output[0];
@@ -552,6 +562,8 @@ class NoiseHandshakeState {
       for (int i = 0; i < remoteEphemeralPublic!.length; i++) remoteEphemeralPublic![i] = 0;
       remoteEphemeralPublic = null;
     }
-    _symmetricState._cipherState.clear();
+    // MED-N4: Dispose symmetric state to zero _chainingKey and _hash on all
+    // failure paths (not just the split() success path).
+    _symmetricState.dispose();
   }
 }

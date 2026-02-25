@@ -179,9 +179,14 @@ class NoiseSessionManager {
 
         if (state.isComplete) {
           final remotePubKey = state.remoteStaticPublic;
-          if (remotePubKey != null && remoteSigningKey.isNotEmpty && remoteSigningKey.length == 32) {
-            if (remoteSigningKey.every((b) => b == 0)) {
-              throw Exception('Invalid signing key: all-zero key rejected');
+          if (remotePubKey != null) {
+            // MED-N2: Reject handshake if signing key is invalid — do not establish
+            // a session without a verified signing key, as that would bypass all
+            // signature verification for this peer.
+            if (remoteSigningKey.length != 32 || remoteSigningKey.every((b) => b == 0)) {
+              state.dispose();
+              peer.handshake = null;
+              throw Exception('Invalid signing key in handshake: rejected (len=${remoteSigningKey.length})');
             }
             peer.signingKey = remoteSigningKey;
             peer.remoteStaticPublicKey = remotePubKey;
@@ -209,9 +214,14 @@ class NoiseSessionManager {
 
         if (state.isComplete) {
           final remotePubKey = state.remoteStaticPublic;
-          if (remotePubKey != null && remoteSigningKey.isNotEmpty && remoteSigningKey.length == 32) {
-            if (remoteSigningKey.every((b) => b == 0)) {
-              throw Exception('Invalid signing key: all-zero key rejected');
+          if (remotePubKey != null) {
+            // MED-N2: Reject handshake if signing key is invalid — do not establish
+            // a session without a verified signing key, as that would bypass all
+            // signature verification for this peer.
+            if (remoteSigningKey.length != 32 || remoteSigningKey.every((b) => b == 0)) {
+              state.dispose();
+              peer.handshake = null;
+              throw Exception('Invalid signing key in handshake: rejected (len=${remoteSigningKey.length})');
             }
             peer.signingKey = remoteSigningKey;
             peer.remoteStaticPublicKey = remotePubKey;
@@ -315,6 +325,9 @@ class NoiseSessionManager {
   /// Clear all sessions and pending handshakes (e.g., on app shutdown).
   void clear() {
     for (final peer in _peers.values) {
+      // INFO-N4: Dispose both sessions and any pending mid-handshake states so
+      // that ephemeral key material is zeroed on app shutdown.
+      peer.handshake?.dispose();
       peer.session?.dispose();
     }
     _peers.clear();

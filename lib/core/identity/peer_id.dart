@@ -13,7 +13,11 @@ class PeerId {
 
   PeerId(this.bytes)
       : assert(bytes.length == 32),
-        _hashCode = Object.hashAll(bytes);
+        // LOW-N3: Use the first 4 bytes of the peer ID as the hash code instead
+        // of Object.hashAll, which produces a weak 32-bit hash with birthday
+        // collisions around 65k entries. Since peer IDs are already cryptographic
+        // hashes (BLAKE2b of pubkey), any 4-byte prefix is uniformly distributed.
+        _hashCode = (bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3];
 
   /// Create a PeerId from a hex string.
   ///

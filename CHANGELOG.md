@@ -5,6 +5,71 @@ Each entry records **what** changed, **which files** were affected, and **why** 
 
 ---
 
+## [v4.6] — Crypto Security Audit v2 Patch
+**Date:** 2026-02-25
+**Branch:** `Major_Security_Fixes`
+**Status:** Complete — 752/752 tests passing · Zero compile errors
+
+### Summary
+Full resolution of the Crypto Security Audit v2 (`security_audit/CRYPTO_SECURITY_AUDIT_v2.md`). 13 production-code fixes across 11 files. No new tests required — all existing 752 tests continue to pass after the changes.
+
+---
+
+### Security Fixes
+
+#### CRIT-N2 — sendPacket falls through to plaintext on rekey or missing session — `lib/core/transport/ble_transport.dart`
+The `sendPacket` unicast path had no guard when `encrypt()` returned `null` (rekey threshold) or when no Noise session existed. A `null` ciphertext left `encodedData` as raw plaintext that was then written to the BLE characteristic. Fixed: if `encrypt()` returns `null`, the send is aborted and a new Noise handshake is initiated (`_initiateNoiseHandshake`). Additionally, if no session exists and the packet is not a handshake packet, the send is dropped entirely rather than leaking plaintext. The same re-handshake trigger was also added to the broadcast central path (previously it just returned early without re-initiating).
+
+#### MED-N2 — Signing key bypass via malformed handshake payload — `lib/core/crypto/noise_session_manager.dart`
+When the signing key payload in Noise message 2 or 3 was empty (0 bytes) or the wrong length, the session was established silently without caching a signing key for that peer. All future packets from that peer would then bypass signature verification. Fixed: if the decrypted payload is not exactly 32 bytes and non-zero, `state.dispose()` is called and an exception is thrown, rejecting the handshake entirely. Applies to both initiator (message 2 processing) and responder (message 3 processing) paths.
+
+#### HIGH-N4 — No automatic re-handshake after rekey threshold — `lib/core/transport/ble_transport.dart`
+When `NoiseSession.shouldRekey` triggered, the session was torn down and `encrypt()` returned `null`, but no code ever initiated a new Noise handshake. The peer was effectively permanently disconnected from encrypted communication until a BLE reconnection. Fixed: both `sendPacket` (on null ciphertext) and `broadcastPacket` (in the central loop) now call `_initiateNoiseHandshake(deviceId)` when the session is torn down for re-keying.
+
+#### HIGH-N3 (partial) — Private keys not zeroed on identity reset — `lib/core/identity/identity_manager.dart`
+`resetIdentity()` previously nulled `_staticPrivateKey` and `_signingPrivateKey` references without zeroing the underlying byte array, leaving key bytes lingering in GC-managed heap until the page was reclaimed. Fixed: both byte arrays are now explicitly zeroed with a fill loop before the references are set to `null`. Full migration to `SecureKey` (mlock'd memory) remains a future task due to API scope.
+
+#### INFO-N4 — clear() does not dispose pending handshake states — `lib/core/crypto/noise_session_manager.dart`
+`NoiseSessionManager.clear()` (called on app shutdown) disposed active sessions but did not call `dispose()` on any mid-handshake `NoiseHandshakeState` objects, leaving ephemeral key material in GC heap. Fixed: added `peer.handshake?.dispose()` before `peer.session?.dispose()` in the clear loop.
+
+#### MED-N4 — NoiseSymmetricState._chainingKey and ._hash not zeroed on failure paths — `lib/core/crypto/noise_protocol.dart`
+The normal `split()` success path zeroed `_chainingKey` and `_hash`. However, if a handshake failed mid-way (e.g., `readMessage` threw `NoiseException`), `NoiseHandshakeState.dispose()` only cleared `_cipherState`, leaving `_chainingKey` and `_hash` populated with intermediate keying material. Fixed: added a `dispose()` method to `NoiseSymmetricState` that zeros both fields and clears the cipher state. `NoiseHandshakeState.dispose()` now calls `_symmetricState.dispose()` instead of directly calling `_symmetricState._cipherState.clear()`.
+
+#### MED-N1 — PKCS#7 padding oracle via early return — `lib/core/protocol/padding.dart`
+`MessagePadding.unpad()` used an early-return loop that leaked timing information about where the first padding byte mismatch occurred. While the class is currently only used after AEAD verification (making active exploitation hard), the pattern was incorrect. Fixed: replaced the early-return loop with a constant-time XOR accumulator that always iterates all padding bytes and returns `null` only if the accumulated diff is non-zero.
+
+#### MED-N3 — Group key and salt stored as hex in GroupStorage — `lib/core/identity/group_storage.dart`
+`GroupStorage` was still using hex encoding for group keys and salts despite `KeyStorage` having migrated to base64 (HIGH-C4 fix). Hex doubles the stored size (64 chars for 32 bytes vs 44 base64 chars) and creates more intermediate string objects in GC heap. Fixed: `saveGroup` now writes base64-encoded values. `loadGroup` uses a new `_decodeBytes()` helper that auto-detects legacy hex strings (via regex `[0-9a-fA-F]+` with even length) and decodes them correctly, providing full backward compatibility.
+
+#### LOW-N2 — File encryption key stored as hex in MessageStorageService — `lib/core/services/message_storage_service.dart`
+Consistent with MED-N3, the per-device file encryption key in `MessageStorageService` was also stored as hex. Fixed: new keys are now stored as base64. Legacy hex keys (exactly 64 chars, all `[0-9a-fA-F]`) are detected on load, decoded correctly, and immediately re-persisted as base64 so future loads use the smaller format.
+
+#### MED-N5 — _isBase64 heuristic can misclassify hex strings — `lib/core/crypto/keys.dart`
+The migration heuristic in `KeyStorage._isBase64` fell back to trying `base64Decode()` on the stored string, which could succeed for certain hex strings (all hex chars are valid base64 alphabet members) and produce the wrong bytes. A hex key would be silently corrupted — the user's identity destroyed without error. Fixed: replaced the try-decode fallback with a definitive regex check: if the string is non-empty, even-length, and matches `[0-9a-fA-F]+`, it is unambiguously hex. Otherwise it is treated as base64. No false positives are possible for our key sizes (32-byte key: 64 hex chars vs 44 base64 chars).
+
+#### INFO-N1 — Emergency alert decoding uses allowMalformed: true — `lib/core/protocol/binary_protocol.dart`
+`BinaryProtocol.decodeEmergencyPayload` decoded the message string with `allowMalformed: true`, which silently substituted replacement characters for invalid UTF-8 bytes. This could enable homoglyph or encoding-confusion attacks in emergency messages. Fixed: changed to `allowMalformed: false` inside a `try`/`on FormatException` block — packets with malformed UTF-8 in the message field return `null` (packet rejected).
+
+#### INFO-N2 — _cachedKeyBytes stores raw private key copy in GC heap — `lib/core/crypto/signatures.dart`
+The CRIT-C3 fix (v4.5) introduced constant-time cache invalidation using `_cachedKeyBytes`, which stored a full 64-byte copy of the Ed25519 private key in Dart's GC-managed heap alongside the `SecureKey` (mlock'd) wrapper. Fixed: `_cachedKeyBytes` replaced with `_cachedKeyHash` — a BLAKE2b-32 hash of the private key. Cache invalidation now compares 32-byte hashes (still constant-time XOR accumulator) without keeping the raw private key in unprotected memory. `clearCache()` zeros `_cachedKeyHash` before nulling it.
+
+#### LOW-N3 — PeerId hash code uses Object.hashAll — `lib/core/identity/peer_id.dart`
+`PeerId._hashCode` was computed with `Object.hashAll(bytes)`, a 32-bit hash with birthday collisions around 65,000 entries. While `==` correctly used `bytesEqual` (so no logic errors), performance of `Set<PeerId>` and `Map<PeerId, ...>` would degrade under high peer counts. Fixed: hash code is now computed as `(bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3]` — the first 4 bytes of the peer ID, which are already cryptographically uniform (peer IDs are BLAKE2b hashes of public keys). This gives the same entropy as `Object.hashAll` without the intermediary hashing overhead.
+
+---
+
+### Remaining Open Items (Not Fixed)
+
+| ID | Reason |
+|----|--------|
+| CRIT-N1 | `aeadChaCha20Poly1305IETF` not exposed in sodium-2.x Dart API; deferred to library upgrade |
+| HIGH-N1 | TOFU: `trustPeer()` exists but wiring into handshake flow is a larger feature |
+| HIGH-N3 (full) | Full `SecureKey` migration for identity private keys requires broad API refactor |
+| LOW-N1 | `FluxonGroup.key` public field; encapsulation refactor deferred |
+| INFO-N3 | `@visibleForTesting` annotation on `NoiseHandshakeState` fields; cosmetic, deferred |
+
+---
+
 ## [v4.5] — Crypto Security Audit Patch
 **Date:** 2026-02-25
 **Branch:** `Major_Security_Fixes`

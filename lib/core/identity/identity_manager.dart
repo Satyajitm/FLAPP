@@ -97,6 +97,14 @@ class IdentityManager {
     } catch (_) {
       // Non-fatal — in-memory set is cleared below.
     }
+    // HIGH-N3: Zero private key bytes before nulling the reference so GC heap
+    // pages holding the key bytes are overwritten rather than lingering until GC.
+    if (_staticPrivateKey != null) {
+      for (int i = 0; i < _staticPrivateKey!.length; i++) _staticPrivateKey![i] = 0;
+    }
+    if (_signingPrivateKey != null) {
+      for (int i = 0; i < _signingPrivateKey!.length; i++) _signingPrivateKey![i] = 0;
+    }
     _staticPrivateKey = null;
     _staticPublicKey = null;
     _signingPrivateKey = null;

@@ -611,10 +611,20 @@ class BleTransport extends Transport {
       var encodedData = packet.encodeWithSignature();
       if (_noiseSessionManager.hasSession(deviceId)) {
         final ciphertext = _noiseSessionManager.encrypt(encodedData, deviceId);
-        if (ciphertext != null) {
-          encodedData = ciphertext;
-          _log('Encrypted packet for $peerHex');
+        // CRIT-N2: If encrypt() returns null (rekey threshold reached), the session
+        // was torn down. Do NOT send plaintext — skip and re-initiate the handshake.
+        if (ciphertext == null) {
+          _log('Session needs rekey for $peerHex — skipping send, re-initiating handshake');
+          _initiateNoiseHandshake(deviceId); // HIGH-N4: Trigger re-handshake
+          return false;
         }
+        encodedData = ciphertext;
+        _log('Encrypted packet for $peerHex');
+      } else if (packet.type != MessageType.handshake) {
+        // CRIT-N2: No session exists and this is not a handshake packet.
+        // Drop rather than sending plaintext over BLE.
+        _log('No session for $peerHex — skipping non-handshake send to prevent plaintext leak');
+        return false;
       }
 
       // H6: Use write-with-response for reliability-critical packet types.
@@ -649,9 +659,11 @@ class BleTransport extends Transport {
         if (_noiseSessionManager.hasSession(entry.key)) {
           final encrypted = _noiseSessionManager.encrypt(data, entry.key);
           // CRIT-C2: If encrypt() returns null (rekey needed), skip this peer
-          // rather than sending plaintext. The session will be re-established
-          // on the next handshake cycle.
-          if (encrypted == null) return;
+          // rather than sending plaintext. HIGH-N4: Trigger re-handshake.
+          if (encrypted == null) {
+            _initiateNoiseHandshake(entry.key);
+            return;
+          }
           sendData = encrypted;
         }
         await entry.value.write(sendData, withoutResponse: true);

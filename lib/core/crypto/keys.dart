@@ -111,20 +111,19 @@ class KeyStorage {
   /// A pure hex string only uses 0-9 and a-f. Checking for any character
   /// outside the hex range is sufficient to distinguish them for our key sizes.
   bool _isBase64(String s) {
-    // Base64 strings have length divisible by 4 (with padding) or contain +/=
-    // characters that hex strings never do.
-    return s.contains('+') || s.contains('/') || s.contains('=') ||
-        // Also consider that base64url (no padding) won't have = but will have
-        // uppercase letters beyond 'F'. Fallback: try to base64 decode.
-        (() {
-          try {
-            base64Decode(s);
-            // If the decoded length matches expected key size, it's base64.
-            return base64Decode(s).length <= 128; // all our keys ≤128 bytes
-          } catch (_) {
-            return false;
-          }
-        })();
+    // MED-N5: Use a definitive hex check rather than a try-base64 heuristic,
+    // which can misclassify certain hex strings as base64 and corrupt key bytes.
+    //
+    // For our key sizes:
+    //   32-byte key as hex = 64 chars  │  as base64 = 44 chars (with padding)
+    //   64-byte key as hex = 128 chars │  as base64 = 88 chars
+    //
+    // A pure hex string contains only [0-9a-fA-F] and has even length.
+    // If the string matches that pattern, treat it as hex (legacy format).
+    if (s.isNotEmpty && s.length.isEven && RegExp(r'^[0-9a-fA-F]+$').hasMatch(s)) {
+      return false; // Definitely hex — do not attempt base64 decode.
+    }
+    return true; // Assume base64 (current format).
   }
 
   /// Get or generate the static key pair.
