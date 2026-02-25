@@ -597,17 +597,12 @@ void main() {
         receiptService: receiptServiceB,
       );
 
-      // 1) Peer A sends a message
+      // 1) Peer A sends a message — capture the actual packet so timestamps match.
       await controllerA.sendMessage('hello B!');
+      final chatPacket = transportA.broadcastedPackets
+          .firstWhere((p) => p.type == MessageType.chat);
 
-      // 2) Simulate the message arriving on Peer B's transport
-      final chatPayload = BinaryProtocol.encodeChatPayload('hello B!',
-          senderName: 'PeerA');
-      final chatPacket = BinaryProtocol.buildPacket(
-        type: MessageType.chat,
-        sourceId: peerA.bytes,
-        payload: chatPayload,
-      );
+      // 2) Simulate the same packet arriving on Peer B's transport.
       transportB.simulateIncomingPacket(chatPacket);
       await Future.delayed(const Duration(milliseconds: 50));
 

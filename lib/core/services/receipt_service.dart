@@ -59,14 +59,20 @@ class ReceiptService {
   }
 
   /// Send a delivery receipt for a received message.
+  ///
+  /// [destId] — when provided the receipt is unicast to that peer (used for
+  /// directed messages such as [MessageType.noiseEncrypted]). When null the
+  /// receipt is broadcast (suitable for group chat messages).
   Future<void> sendDeliveryReceipt({
     required int originalTimestamp,
     required Uint8List originalSenderId,
+    Uint8List? destId,
   }) async {
     await _sendReceipt(
       receiptType: ReceiptType.delivered,
       originalTimestamp: originalTimestamp,
       originalSenderId: originalSenderId,
+      destId: destId,
     );
   }
 
@@ -96,8 +102,16 @@ class ReceiptService {
         .toList();
     _pendingReadReceipts.clear();
 
-    // Send all pending read receipts as a single BLE packet.
-    await _sendBatchReceipts(receipts);
+    // Send in chunks so no receipt is silently dropped by the
+    // maxBatchReceiptCount cap inside encodeBatchReceiptPayload.
+    final chunkSize = BinaryProtocol.maxBatchReceiptCount;
+    for (var i = 0; i < receipts.length; i += chunkSize) {
+      final chunk = receipts.sublist(
+        i,
+        (i + chunkSize).clamp(0, receipts.length),
+      );
+      await _sendBatchReceipts(chunk);
+    }
   }
 
   Future<void> _sendBatchReceipts(List<ReceiptPayload> receipts) async {
@@ -121,6 +135,7 @@ class ReceiptService {
     required int receiptType,
     required int originalTimestamp,
     required Uint8List originalSenderId,
+    Uint8List? destId,
   }) async {
     var payload = BinaryProtocol.encodeReceiptPayload(
       receiptType: receiptType,
@@ -137,10 +152,15 @@ class ReceiptService {
     final packet = BinaryProtocol.buildPacket(
       type: MessageType.ack,
       sourceId: _myPeerId.bytes,
+      destId: destId,
       payload: payload,
     );
 
-    await _transport.broadcastPacket(packet);
+    if (destId != null) {
+      await _transport.sendPacket(packet, destId);
+    } else {
+      await _transport.broadcastPacket(packet);
+    }
   }
 
   void _handleIncomingReceipt(FluxonPacket packet) {

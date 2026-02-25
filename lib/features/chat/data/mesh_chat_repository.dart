@@ -75,10 +75,13 @@ class MeshChatRepository implements ChatRepository {
 
     _messageController.add(message);
 
-    // Auto-send delivery receipt
+    // Auto-send delivery receipt. For directed (noiseEncrypted) messages unicast
+    // back to the original sender to avoid flooding the mesh with receipts that
+    // other nodes cannot use.
     _receiptService?.sendDeliveryReceipt(
       originalTimestamp: packet.timestamp,
       originalSenderId: packet.sourceId,
+      destId: packet.type == MessageType.noiseEncrypted ? packet.sourceId : null,
     );
   }
 
