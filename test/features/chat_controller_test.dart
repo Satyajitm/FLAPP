@@ -7,6 +7,11 @@ import 'package:fluxon_app/features/chat/chat_controller.dart';
 import 'package:fluxon_app/features/chat/data/chat_repository.dart';
 import 'package:fluxon_app/features/chat/message_model.dart';
 
+/// Stable receipt-matching key used by ReceiptService / ChatController.
+/// Format: senderHex:timestampMillis (independent of per-packet random flags).
+String _receiptKey(ChatMessage m) =>
+    '${m.sender.hex}:${m.timestamp.millisecondsSinceEpoch}';
+
 // ---------------------------------------------------------------------------
 // Fake ChatRepository for testing the Controller in isolation
 // ---------------------------------------------------------------------------
@@ -227,7 +232,7 @@ void main() {
       expect(msg.status, equals(MessageStatus.sent));
 
       repository.simulateReceipt(ReceiptEvent(
-        originalMessageId: msg.id,
+        originalMessageId: _receiptKey(msg),
         receiptType: 0x01, // delivered
         fromPeer: remotePeerId,
       ));
@@ -244,7 +249,7 @@ void main() {
       final msg = controller.state.messages.first;
 
       repository.simulateReceipt(ReceiptEvent(
-        originalMessageId: msg.id,
+        originalMessageId: _receiptKey(msg),
         receiptType: 0x02, // read
         fromPeer: remotePeerId,
       ));
@@ -278,7 +283,7 @@ void main() {
       await Future.delayed(const Duration(milliseconds: 20));
 
       repository.simulateReceipt(ReceiptEvent(
-        originalMessageId: incoming.id,
+        originalMessageId: _receiptKey(incoming),
         receiptType: 0x01,
         fromPeer: _makePeerId(0xCC),
       ));
@@ -297,17 +302,17 @@ void main() {
       final peerD = _makePeerId(0xDD);
 
       repository.simulateReceipt(ReceiptEvent(
-        originalMessageId: msg.id,
+        originalMessageId: _receiptKey(msg),
         receiptType: 0x01,
         fromPeer: remotePeerId,
       ));
       repository.simulateReceipt(ReceiptEvent(
-        originalMessageId: msg.id,
+        originalMessageId: _receiptKey(msg),
         receiptType: 0x01,
         fromPeer: peerC,
       ));
       repository.simulateReceipt(ReceiptEvent(
-        originalMessageId: msg.id,
+        originalMessageId: _receiptKey(msg),
         receiptType: 0x01,
         fromPeer: peerD,
       ));
@@ -325,7 +330,7 @@ void main() {
 
       // Send only a read receipt (no prior delivery receipt)
       repository.simulateReceipt(ReceiptEvent(
-        originalMessageId: msg.id,
+        originalMessageId: _receiptKey(msg),
         receiptType: 0x02, // read
         fromPeer: remotePeerId,
       ));
@@ -345,7 +350,7 @@ void main() {
 
       // First: read receipt
       repository.simulateReceipt(ReceiptEvent(
-        originalMessageId: msg.id,
+        originalMessageId: _receiptKey(msg),
         receiptType: 0x02,
         fromPeer: remotePeerId,
       ));
@@ -354,7 +359,7 @@ void main() {
 
       // Then: late delivery receipt from same peer
       repository.simulateReceipt(ReceiptEvent(
-        originalMessageId: msg.id,
+        originalMessageId: _receiptKey(msg),
         receiptType: 0x01,
         fromPeer: remotePeerId,
       ));
@@ -371,12 +376,12 @@ void main() {
       final msg = controller.state.messages.first;
 
       repository.simulateReceipt(ReceiptEvent(
-        originalMessageId: msg.id,
+        originalMessageId: _receiptKey(msg),
         receiptType: 0x01,
         fromPeer: remotePeerId,
       ));
       repository.simulateReceipt(ReceiptEvent(
-        originalMessageId: msg.id,
+        originalMessageId: _receiptKey(msg),
         receiptType: 0x01,
         fromPeer: remotePeerId,
       ));
@@ -395,13 +400,13 @@ void main() {
 
       // Peer B delivers
       repository.simulateReceipt(ReceiptEvent(
-        originalMessageId: msg.id,
+        originalMessageId: _receiptKey(msg),
         receiptType: 0x01,
         fromPeer: remotePeerId,
       ));
       // Peer C reads (implying delivery)
       repository.simulateReceipt(ReceiptEvent(
-        originalMessageId: msg.id,
+        originalMessageId: _receiptKey(msg),
         receiptType: 0x02,
         fromPeer: peerC,
       ));

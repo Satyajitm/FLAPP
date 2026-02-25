@@ -5,6 +5,115 @@ Each entry records **what** changed, **which files** were affected, and **why** 
 
 ---
 
+## [v4.4] — BLE Security Audit Patch (Patch cycle 2 v5)
+**Date:** 2026-02-25
+**Branch:** `Major_Security_Fixes`
+**Status:** Complete — 723/723 tests passing · Zero compile errors
+
+### Summary
+Full resolution of the BLE Security Audit (`security_audit/BLE_SECURITY_AUDIT.md`). 28 findings addressed across 9 production files. 13 new security-focused tests added.
+
+---
+
+### Security Fixes
+
+#### CRIT-1 / MED-5: Peripheral Broadcast Only to Authenticated Peers — `lib/core/transport/ble_transport.dart`
+- Added `_authenticatedPeripheralClients` Set tracking peers that completed Noise handshake.
+- `broadcastPacket()` now iterates only authenticated peripheral clients; each packet is individually Noise-encrypted per recipient before sending via `BlePeripheral.updateCharacteristic`.
+- Unauthenticated GATT clients receive no broadcast data.
+
+#### CRIT-2: Source ID Spoofing Check — `lib/core/transport/ble_transport.dart`
+- After packet decode, `_handleIncomingData` cross-checks `packet.sourceId` against the authenticated peer hex from `_deviceToPeerHex`. Mismatches are logged and the packet is dropped.
+
+#### CRIT-4: Handshake State Memory Safety — `lib/core/crypto/noise_session_manager.dart`
+- `processHandshakeMessage` wrapped in try/finally; `state.dispose()` (zeroing ephemeral keys) is called on both success and failure paths.
+- Added global handshake rate limit: max 20 handshakes per minute across all peers.
+
+#### HIGH-1: Global Packet Rate Limit — `lib/core/transport/ble_transport.dart`
+- Added `_globalPacketCount` / `_globalRateWindowStart` limiter capped at 100 packets/second.
+- Per-device rate-limit key switched from raw device ID to authenticated peer hex (post-handshake) to prevent unauthenticated amplification.
+
+#### HIGH-2: Peripheral Client Eviction — `lib/core/transport/ble_transport.dart`
+- `_peripheralClients` changed from `Set<String>` to `Map<String, DateTime>` for time-based tracking.
+- Added `_peripheralClientCleanupTimer` (30 s) calling `_evictStalePeripheralClients()` — removes clients idle >60 s.
+
+#### HIGH-3: Nonce Overflow + Sync Fix — `lib/core/crypto/noise_protocol.dart`
+- Nonce overflow check changed from `> 0xFFFFFFFF` to `>= 0xFFFFFFFF` (was off-by-one).
+- Decrypt no longer increments `_nonce` when `useExtractedNonce` is true (was double-incrementing).
+
+#### HIGH-4: Replay Window Bit-Shift Direction — `lib/core/crypto/noise_protocol.dart`
+- Rewrote `_markNonceAsSeen` with correct bit-shift direction. Previous implementation shifted bits the wrong way, causing replay-window slots to be marked incorrectly and allowing replayed packets through.
+
+#### HIGH-5: Emergency Rebroadcast Fresh Packets — `lib/features/emergency/data/mesh_emergency_repository.dart`
+- Each rebroadcast now calls `BinaryProtocol.buildPacket` separately (new timestamp, new random flags), preventing relay loops from duplicate packetIds.
+- Random jitter 400–600 ms between rebroadcasts (was fixed 500 ms).
+
+#### HIGH-7: `_connectingDevices` Guard Always Cleaned Up — `lib/core/transport/ble_transport.dart`
+- `_handleDiscoveredDevice` wrapped in try/finally to guarantee removal from `_connectingDevices` even on exceptions, preventing connection-slot starvation.
+
+#### MED-1: Per-Packet Random Nonce in Flags — `lib/core/protocol/binary_protocol.dart`, `lib/core/protocol/packet.dart`
+- `buildPacket` `flags` parameter now defaults to `Random.secure().nextInt(256)` instead of `0`.
+- `_computePacketId()` includes `flags` in the ID: `sourceId:timestamp:type:flags`, making same-millisecond packets from the same peer distinguishable in the dedup cache.
+
+#### MED-2: GATT Characteristic Read Permission Removed — `lib/core/transport/ble_transport.dart`
+- Removed `read` property and `readable` permission from the packet GATT characteristic; the characteristic is write+notify only, reducing attack surface.
+
+#### MED-3: Global Handshake Rate Limit — `lib/core/crypto/noise_session_manager.dart`
+- Added global 20-handshakes-per-minute cap across all device IDs to mitigate CPU exhaustion from handshake floods.
+
+#### MED-6: Malformed UTF-8 Rejected — `lib/core/protocol/binary_protocol.dart`
+- `decodeChatPayload` uses `utf8.decode(..., allowMalformed: false)` in a try/catch; malformed sequences return an empty `ChatPayload` instead of corrupted text.
+
+#### MED-7: Handshake Timeout Enforcement — `lib/core/transport/ble_transport.dart`
+- Added `_handshakeTimeoutTimer` (15 s) calling `_checkHandshakeTimeouts()` — disconnects peripheral clients that haven't completed Noise handshake within 30 s of connecting.
+
+#### MED-8: Gossip Sync Per-Peer Rate Limit — `lib/core/mesh/gossip_sync.dart`
+- `handleSyncRequest` now tracks per-peer response counts via `_syncRateByPeer` (hex-keyed `Map<String, _SyncRateState>`).
+- `GossipSyncConfig` gains `maxSyncPacketsPerRequest = 20`; each sync round caps sends per requesting peer.
+
+#### LOW-2: Signing Key Cache by Hash — `lib/core/crypto/signatures.dart`
+- `Signatures.sign` no longer retains a raw copy of the private key bytes for change detection.
+- Replaced with `_cachedKeyHashCode = Object.hashAll(privateKey)` — detects key changes without keeping the raw key in GC-managed Dart heap.
+
+#### LOW-9: Device IDs Removed from Logs — `lib/core/transport/ble_transport.dart`
+- Removed raw BLE device IDs from warning/info log messages to avoid leaking hardware identifiers.
+
+#### H1: Advertising Anonymization — `lib/core/transport/ble_transport.dart`
+- `localName` removed from BLE advertisement payload; devices advertise by service UUID only.
+
+#### H2: Cleartext Network Traffic Blocked — `android/app/src/main/res/xml/network_security_config.xml`
+- Added `networkSecurityConfig` in `AndroidManifest.xml`; cleartext HTTP blocked at the OS level (OSM tiles require HTTPS).
+
+#### H6: Write-with-Response for Critical Packets — `lib/core/transport/ble_transport.dart`
+- Handshake and emergency packets use GATT `writeWithResponse` for delivery acknowledgement; other packets continue to use `writeWithoutResponse` for throughput.
+
+#### Receipt Key Stability Fix — `lib/core/services/receipt_service.dart`, `lib/features/chat/chat_controller.dart`
+- MED-1 added `flags` to `packetId`, breaking receipt matching that reconstructed the old `srcHex:timestamp:type` format.
+- `ReceiptService._emitReceiptEvent` now emits `srcHex:timestamp` as the stable receipt-matching key (independent of flags/type).
+- `ChatController._handleReceipt` matches using `sender.hex:timestamp.millisecondsSinceEpoch` instead of `message.id`.
+
+---
+
+### New Tests — `test/core/security_hardening_test.dart` (+13)
+
+| Test | Covers |
+|---|---|
+| Two packets same source/time, different flags → distinct IDs | MED-1 |
+| packetId includes flags field | MED-1 |
+| buildPacket random flags are in 0–255 range | MED-1 |
+| decodeChatPayload rejects 0xFF bytes | MED-6 |
+| decodeChatPayload rejects incomplete multi-byte sequence | MED-6 |
+| decodeChatPayload accepts valid ASCII | MED-6 |
+| decodeChatPayload accepts valid multi-byte UTF-8 (€) | MED-6 |
+| handleSyncRequest sends ≤ maxSyncPacketsPerRequest | MED-8 |
+| handleSyncRequest skips packets requester already has | MED-8 |
+| GossipSyncConfig default maxSyncPacketsPerRequest = 20 | MED-8 |
+| buildPacket with random flags → IDs differ across rebroadcasts | HIGH-5 |
+| Explicit flags param overrides random default | HIGH-5 |
+| Receipt key independent of per-packet flags | MED-1 regression |
+
+---
+
 ## [v3.3] — Bug Fixes: Batch Receipt Overflow + loadMessages Scope Leak
 **Date:** 2026-02-24
 **Branch:** `Major_Security_Fixes`

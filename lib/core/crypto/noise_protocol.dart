@@ -87,7 +87,8 @@ class NoiseCipherState {
   /// Encrypt plaintext with optional associated data.
   Uint8List encrypt(Uint8List plaintext, {Uint8List? ad}) {
     if (_key == null) throw const NoiseException(NoiseError.uninitializedCipher);
-    if (_nonce > 0xFFFFFFFF) throw const NoiseException(NoiseError.nonceExceeded);
+    // HIGH-3: Use >= to catch the nonce exactly at 0xFFFFFFFF before overflow.
+    if (_nonce >= 0xFFFFFFFF) throw const NoiseException(NoiseError.nonceExceeded);
 
     final currentNonce = _nonce;
 
@@ -156,8 +157,13 @@ class NoiseCipherState {
 
       if (useExtractedNonce) {
         _markNonceAsSeen(decryptionNonce);
+        // HIGH-3: Don't increment the internal counter when using extracted
+        // nonces — the counter is only used for non-extracted-nonce sessions
+        // (i.e., handshake phase). During transport, the received nonce IS
+        // the authoritative value tracked by the replay window.
+      } else {
+        _nonce++;
       }
-      _nonce++;
 
       return plaintext;
     } catch (_) {
@@ -178,27 +184,37 @@ class NoiseCipherState {
     return (_replayWindow[byteIndex] & (1 << bitIndex)) == 0;
   }
 
+  // HIGH-4: Fixed sliding window shift. The bitmap encodes:
+  //   _replayWindow[byteIdx] bit `bitIdx` = nonce at offset `byteIdx*8 + bitIdx`
+  //   from _highestReceivedNonce (offset 0 = most recent).
+  // When the highest nonce advances by `shift`, all existing offsets increase
+  // by `shift`, so old data must move toward HIGHER byte/bit indices.
   void _markNonceAsSeen(int receivedNonce) {
     if (receivedNonce > _highestReceivedNonce) {
       final shift = receivedNonce - _highestReceivedNonce;
       if (shift >= replayWindowSize) {
         _replayWindow.fillRange(0, replayWindowBytes, 0);
       } else {
-        // Shift window right
-        for (var i = replayWindowBytes - 1; i >= 0; i--) {
-          final sourceIdx = i - shift ~/ 8;
+        final byteShift = shift ~/ 8;
+        final bitShift = shift % 8;
+        // Iterate from high to low so reads always come from unmodified source.
+        for (var j = replayWindowBytes - 1; j >= 0; j--) {
+          final hiSrc = j - byteShift;
+          final loSrc = j - byteShift - 1;
           int newByte = 0;
-          if (sourceIdx >= 0) {
-            newByte = _replayWindow[sourceIdx] >> (shift % 8);
-            if (sourceIdx > 0 && shift % 8 != 0) {
-              newByte |= _replayWindow[sourceIdx - 1] << (8 - shift % 8);
-            }
+          if (hiSrc >= 0) {
+            // Upper bits of new byte j come from lower bits of old byte hiSrc.
+            newByte = (_replayWindow[hiSrc] << bitShift) & 0xFF;
           }
-          _replayWindow[i] = newByte & 0xFF;
+          if (loSrc >= 0 && bitShift > 0) {
+            // Lower bits of new byte j carry over from upper bits of old byte loSrc.
+            newByte |= _replayWindow[loSrc] >> (8 - bitShift);
+          }
+          _replayWindow[j] = newByte;
         }
       }
       _highestReceivedNonce = receivedNonce;
-      _replayWindow[0] |= 1;
+      _replayWindow[0] |= 1; // Mark new highest nonce (offset 0) as seen.
     } else {
       final offset = _highestReceivedNonce - receivedNonce;
       _replayWindow[offset ~/ 8] |= (1 << (offset % 8));

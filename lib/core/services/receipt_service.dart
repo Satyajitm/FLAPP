@@ -169,8 +169,9 @@ class ReceiptService {
 
   void _emitReceiptEvent(ReceiptPayload receipt, PeerId fromPeer) {
     final srcHex = HexUtils.encode(receipt.originalSenderId);
-    final originalMessageId =
-        '$srcHex:${receipt.originalTimestamp}:${MessageType.chat.value}';
+    // Use sender:timestamp as stable receipt-matching key (independent of
+    // per-packet random flags introduced by MED-1).
+    final originalMessageId = '$srcHex:${receipt.originalTimestamp}';
     _receiptController.add(ReceiptEvent(
       originalMessageId: originalMessageId,
       receiptType: receipt.receiptType,

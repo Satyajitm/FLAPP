@@ -1,6 +1,5 @@
 import 'dart:typed_data';
 import 'package:sodium_libs/sodium_libs.dart';
-import '../../shared/hex_utils.dart';
 import 'sodium_instance.dart';
 
 /// Ed25519 packet signing and verification.
@@ -11,7 +10,10 @@ class Signatures {
   /// secure buffer on every [sign] call (which is hot path — one per outbound
   /// packet). Populated lazily on first [sign] call.
   static SecureKey? _cachedSigningKey;
-  static Uint8List? _cachedSigningKeyBytes;
+
+  /// LOW-2: Hash of the cached key's bytes (for change detection).
+  /// Using a hash avoids keeping the raw key bytes in Dart GC-managed heap.
+  static int _cachedKeyHashCode = 0;
 
   /// Generate an Ed25519 signing key pair.
   static ({Uint8List privateKey, Uint8List publicKey}) generateSigningKeyPair() {
@@ -33,13 +35,13 @@ class Signatures {
   static Uint8List sign(Uint8List message, Uint8List privateKey) {
     final sodium = sodiumInstance;
 
-    // Re-use the cached SecureKey if the key bytes haven't changed.
-    if (_cachedSigningKey == null ||
-        _cachedSigningKeyBytes == null ||
-        !bytesEqual(_cachedSigningKeyBytes!, privateKey)) {
+    // LOW-2: Use a hash of the key for change-detection instead of a raw copy.
+    // This avoids retaining the private key bytes in GC-managed Dart heap.
+    final keyHash = Object.hashAll(privateKey);
+    if (_cachedSigningKey == null || _cachedKeyHashCode != keyHash) {
       _cachedSigningKey?.dispose();
       _cachedSigningKey = SecureKey.fromList(sodium, privateKey);
-      _cachedSigningKeyBytes = privateKey;
+      _cachedKeyHashCode = keyHash;
     }
 
     return sodium.crypto.sign.detached(
@@ -52,7 +54,7 @@ class Signatures {
   static void clearCache() {
     _cachedSigningKey?.dispose();
     _cachedSigningKey = null;
-    _cachedSigningKeyBytes = null;
+    _cachedKeyHashCode = 0;
   }
 
 

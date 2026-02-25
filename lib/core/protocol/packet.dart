@@ -49,8 +49,12 @@ class FluxonPacket {
   /// Compute the unique packet identifier for deduplication.
   ///
   /// Called once during construction via the [packetId] late final field.
+  ///
+  /// MED-1: Include [flags] in the ID so that two packets of the same type
+  /// from the same source within the same millisecond get distinct IDs
+  /// (flags carries a per-packet random nonce set by [BinaryProtocol.buildPacket]).
   String _computePacketId() {
-    return '${HexUtils.encode(sourceId)}:$timestamp:${type.value}';
+    return '${HexUtils.encode(sourceId)}:$timestamp:${type.value}:$flags';
   }
 
   /// Create a copy with a signature attached.

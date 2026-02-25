@@ -406,14 +406,20 @@ void main() {
       expect(updated.status, equals(MessageStatus.delivered));
     });
 
-    test('receipt originalMessageId matches packet packetId format', () async {
+    test('receipt originalMessageId uses stable sender:timestamp format',
+        () async {
       await controller.sendMessage('id-matching test');
       final sentMsg = controller.state.messages.first;
 
-      // The message ID format is: sourceIdHex:timestamp:typeValue
+      // packetId (dedup key) includes flags: sourceIdHex:timestamp:type:flags
       final expectedPrefix = HexUtils.encode(myPeerId.bytes);
       expect(sentMsg.id, startsWith(expectedPrefix));
-      expect(sentMsg.id, contains(':${MessageType.chat.value}'));
+      expect(sentMsg.id, contains(':${MessageType.chat.value}:'));
+
+      // Receipt-matching key is stable: senderHex:timestamp (no type/flags)
+      final receiptKey =
+          '${sentMsg.sender.hex}:${sentMsg.timestamp.millisecondsSinceEpoch}';
+      expect(receiptKey, startsWith(expectedPrefix));
     });
   });
 

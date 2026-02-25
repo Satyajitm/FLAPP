@@ -265,8 +265,8 @@ void main() {
       expect(event.receiptType, equals(ReceiptType.delivered));
       expect(event.fromPeer, equals(remotePeerId));
 
-      final expectedId =
-          '${HexUtils.encode(myPeerId.bytes)}:3000:${MessageType.chat.value}';
+      // Format is now senderHex:timestamp (stable, independent of packet flags).
+      final expectedId = '${HexUtils.encode(myPeerId.bytes)}:3000';
       expect(event.originalMessageId, equals(expectedId));
     });
 
@@ -502,9 +502,8 @@ void main() {
       transport.simulateIncomingPacket(packet);
       final event = await future;
 
-      // Format should be: senderIdHex:timestamp:chatTypeValue
-      final expectedId =
-          '${HexUtils.encode(remotePeerId.bytes)}:8000:${MessageType.chat.value}';
+      // Format is now senderHex:timestamp (stable, independent of packet flags).
+      final expectedId = '${HexUtils.encode(remotePeerId.bytes)}:8000';
       expect(event.originalMessageId, equals(expectedId));
       expect(event.receiptType, equals(ReceiptType.read));
       expect(event.fromPeer, equals(_makePeerId(0xCC)));

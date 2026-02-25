@@ -45,6 +45,12 @@ class NoiseSessionManager {
   /// Protects against unbounded map growth from device-ID-cycling attacks.
   static const _maxPeers = 500;
 
+  /// MED-3: Global handshake rate limit across all devices.
+  /// Prevents CPU exhaustion via MAC-rotation attacks (X25519 DH per handshake).
+  int _globalHandshakeCount = 0;
+  int _globalHandshakeWindowStart = 0;
+  static const _maxGlobalHandshakesPerMinute = 20;
+
   NoiseSessionManager({
     required Uint8List myStaticPrivKey,
     required Uint8List myStaticPubKey,
@@ -104,6 +110,20 @@ class NoiseSessionManager {
   ) {
     // Rate-limit incoming handshake attempts to prevent replay / DoS attacks.
     final now = DateTime.now().millisecondsSinceEpoch;
+
+    // MED-3: Global handshake rate limit (max 20 per minute across all devices).
+    if (now - _globalHandshakeWindowStart >= 60000) {
+      _globalHandshakeCount = 0;
+      _globalHandshakeWindowStart = now;
+    }
+    _globalHandshakeCount++;
+    if (_globalHandshakeCount > _maxGlobalHandshakesPerMinute) {
+      SecureLogger.warning(
+        '[NoiseSessionManager] Global handshake rate limit exceeded — dropping',
+      );
+      return (response: null, remotePubKey: null, remoteSigningPublicKey: null);
+    }
+
     final peer = _stateFor(deviceId);
 
     if (now - peer.lastHandshakeTime < 60000) {
@@ -122,83 +142,100 @@ class NoiseSessionManager {
         localStaticPublicKey: _myStaticPubKey,
       );
 
-      state.readMessage(messageBytes); // <- e
-      // Include our signing public key as payload in message 2 (AEAD-encrypted via es DH)
-      final message2 = state.writeMessage(payload: _localSigningPublicKey); // -> e, ee, s, es
+      try {
+        state.readMessage(messageBytes); // <- e
+        // Include our signing public key as payload in message 2 (AEAD-encrypted via es DH)
+        final message2 = state.writeMessage(payload: _localSigningPublicKey); // -> e, ee, s, es
 
-      peer.handshake = state;
+        peer.handshake = state;
 
-      SecureLogger.debug(
-        '[NoiseSessionManager] Received handshake message 1 from $deviceId, '
-        'responding as responder',
-      );
+        SecureLogger.debug(
+          '[NoiseSessionManager] Received handshake message 1 from $deviceId, '
+          'responding as responder',
+        );
 
-      return (response: message2, remotePubKey: null, remoteSigningPublicKey: null);
+        return (response: message2, remotePubKey: null, remoteSigningPublicKey: null);
+      } catch (e) {
+        // CRIT-4: Dispose ephemeral keys on any failure path.
+        state.dispose();
+        rethrow;
+      }
     }
 
     final state = peer.handshake!;
 
-    // Process based on current role and handshake progress.
-    if (state.role == NoiseRole.initiator) {
-      // Initiator receiving message 2: <- e, ee, s, es (with remote signing key as payload)
-      final remoteSigningKey = state.readMessage(messageBytes); // returns decrypted payload
-      // Include our signing public key as payload in message 3 (AEAD-encrypted via se DH)
-      final message3 = state.writeMessage(payload: _localSigningPublicKey); // -> s, se
+    // CRIT-4: Use try/finally to ensure handshake state is always disposed on
+    // any error path, preventing ephemeral key material from lingering in heap.
+    try {
+      // Process based on current role and handshake progress.
+      if (state.role == NoiseRole.initiator) {
+        // Initiator receiving message 2: <- e, ee, s, es (with remote signing key as payload)
+        final remoteSigningKey = state.readMessage(messageBytes); // returns decrypted payload
+        // Include our signing public key as payload in message 3 (AEAD-encrypted via se DH)
+        final message3 = state.writeMessage(payload: _localSigningPublicKey); // -> s, se
 
-      if (state.isComplete) {
-        final remotePubKey = state.remoteStaticPublic;
-        if (remotePubKey != null && remoteSigningKey.isNotEmpty && remoteSigningKey.length == 32) {
-          if (remoteSigningKey.every((b) => b == 0)) {
-            throw Exception('Invalid signing key: all-zero key rejected');
+        if (state.isComplete) {
+          final remotePubKey = state.remoteStaticPublic;
+          if (remotePubKey != null && remoteSigningKey.isNotEmpty && remoteSigningKey.length == 32) {
+            if (remoteSigningKey.every((b) => b == 0)) {
+              throw Exception('Invalid signing key: all-zero key rejected');
+            }
+            peer.signingKey = remoteSigningKey;
+            peer.remoteStaticPublicKey = remotePubKey;
+
+            final session = NoiseSession.fromHandshake(
+              state,
+              remotePeerId: remotePubKey,
+            );
+            peer.session = session;
+            peer.handshake = null;
+            state.dispose(); // CRIT-4: Zero ephemeral keys after session extraction
+
+            SecureLogger.debug(
+              '[NoiseSessionManager] Initiator handshake complete for $deviceId, session established',
+            );
+
+            return (response: message3, remotePubKey: remotePubKey, remoteSigningPublicKey: remoteSigningKey);
           }
-          peer.signingKey = remoteSigningKey;
-          peer.remoteStaticPublicKey = remotePubKey;
-
-          final session = NoiseSession.fromHandshake(
-            state,
-            remotePeerId: remotePubKey,
-          );
-          peer.session = session;
-          peer.handshake = null;
-
-          SecureLogger.debug(
-            '[NoiseSessionManager] Initiator handshake complete for $deviceId, session established',
-          );
-
-          return (response: message3, remotePubKey: remotePubKey, remoteSigningPublicKey: remoteSigningKey);
         }
-      }
 
-      return (response: message3, remotePubKey: null, remoteSigningPublicKey: null);
-    } else {
-      // Responder receiving message 3: -> s, se (with remote signing key as payload)
-      final remoteSigningKey = state.readMessage(messageBytes); // returns decrypted payload
+        return (response: message3, remotePubKey: null, remoteSigningPublicKey: null);
+      } else {
+        // Responder receiving message 3: -> s, se (with remote signing key as payload)
+        final remoteSigningKey = state.readMessage(messageBytes); // returns decrypted payload
 
-      if (state.isComplete) {
-        final remotePubKey = state.remoteStaticPublic;
-        if (remotePubKey != null && remoteSigningKey.isNotEmpty && remoteSigningKey.length == 32) {
-          if (remoteSigningKey.every((b) => b == 0)) {
-            throw Exception('Invalid signing key: all-zero key rejected');
+        if (state.isComplete) {
+          final remotePubKey = state.remoteStaticPublic;
+          if (remotePubKey != null && remoteSigningKey.isNotEmpty && remoteSigningKey.length == 32) {
+            if (remoteSigningKey.every((b) => b == 0)) {
+              throw Exception('Invalid signing key: all-zero key rejected');
+            }
+            peer.signingKey = remoteSigningKey;
+            peer.remoteStaticPublicKey = remotePubKey;
+
+            final session = NoiseSession.fromHandshake(
+              state,
+              remotePeerId: remotePubKey,
+            );
+            peer.session = session;
+            peer.handshake = null;
+            state.dispose(); // CRIT-4: Zero ephemeral keys after session extraction
+
+            SecureLogger.debug(
+              '[NoiseSessionManager] Responder handshake complete for $deviceId, session established',
+            );
+
+            return (response: null, remotePubKey: remotePubKey, remoteSigningPublicKey: remoteSigningKey);
           }
-          peer.signingKey = remoteSigningKey;
-          peer.remoteStaticPublicKey = remotePubKey;
-
-          final session = NoiseSession.fromHandshake(
-            state,
-            remotePeerId: remotePubKey,
-          );
-          peer.session = session;
-          peer.handshake = null;
-
-          SecureLogger.debug(
-            '[NoiseSessionManager] Responder handshake complete for $deviceId, session established',
-          );
-
-          return (response: null, remotePubKey: remotePubKey, remoteSigningPublicKey: remoteSigningKey);
         }
-      }
 
-      return (response: null, remotePubKey: null, remoteSigningPublicKey: null);
+        return (response: null, remotePubKey: null, remoteSigningPublicKey: null);
+      }
+    } catch (e) {
+      // CRIT-4: Dispose handshake state on any failure to zero ephemeral keys.
+      peer.handshake?.dispose();
+      peer.handshake = null;
+      rethrow;
     }
   }
 

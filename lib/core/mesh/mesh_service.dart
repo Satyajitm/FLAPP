@@ -207,11 +207,16 @@ class MeshService implements Transport {
           return; // Drop forged packet
         }
       } else {
-        // Signing key not yet available — accept provisionally.
-        // In real usage, the Noise handshake provides the key before heavy
-        // traffic. Once the key is cached, all subsequent packets are verified.
+        // CRIT-3 (partial mitigation): Signing key not yet available.
+        // Note: for multi-hop relay, packets from distant nodes legitimately
+        // arrive before their signing key is cached. BleTransport already
+        // enforces that DIRECT connections without Noise sessions are rejected
+        // (see BleTransport C4). Here we log and accept provisionally for
+        // relay compatibility. Once the signing key is learned (via handshake
+        // or topology announce), all subsequent packets from this source are
+        // fully verified.
         SecureLogger.debug(
-          'Packet from unknown peer (no signing key cached) — accepting provisionally',
+          'Accepting ${packet.type.name} from unverified peer provisionally',
           category: _cat,
         );
       }

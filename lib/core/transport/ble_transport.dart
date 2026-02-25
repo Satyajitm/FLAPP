@@ -64,9 +64,29 @@ class BleTransport extends Transport {
   /// Minimum interval between packets from the same device (20 packets/sec max).
   static const int _minPacketIntervalMs = 50;
 
-  /// Tracks devices that have connected to us in our peripheral (GATT server) role.
+  /// Tracks devices that have connected to us in our peripheral (GATT server) role,
+  /// mapped to their last-write timestamp for time-based eviction (HIGH-2).
   /// Used to enforce [config.maxConnections] on peripheral-side (M4).
-  final Set<String> _peripheralClients = {};
+  final Map<String, DateTime> _peripheralClients = {};
+
+  /// Set of peripheral client device IDs that have completed a Noise handshake,
+  /// allowing encrypted GATT notifications to be sent (CRIT-1).
+  final Set<String> _authenticatedPeripheralClients = {};
+
+  /// Global packet counter for cross-device rate limiting (HIGH-1).
+  /// Tracks total packets received per second across all devices.
+  int _globalPacketCount = 0;
+  DateTime _globalRateWindowStart = DateTime.now();
+  static const int _maxGlobalPacketsPerSecond = 100;
+
+  /// Timer for periodic peripheral client eviction (HIGH-2).
+  Timer? _peripheralClientCleanupTimer;
+
+  /// Periodic timer for handshake timeouts on peripheral clients (MED-7).
+  Timer? _handshakeTimeoutTimer;
+
+  /// Tracks when each peripheral client connected for handshake timeout (MED-7).
+  final Map<String, DateTime> _peripheralClientConnectedAt = {};
 
   bool _running = false;
   StreamSubscription? _scanSubscription;
@@ -160,6 +180,8 @@ class BleTransport extends Transport {
     _idleCheckTimer?.cancel();
     _dutyCycleOffTimer?.cancel();
     _scanRestartTimer?.cancel();
+    _peripheralClientCleanupTimer?.cancel();
+    _handshakeTimeoutTimer?.cancel();
     await _scanSubscription?.cancel();
     await FlutterBluePlus.stopScan();
 
@@ -185,6 +207,8 @@ class BleTransport extends Transport {
     _deviceMtu.clear();
     _lastPacketTime.clear();
     _peripheralClients.clear();
+    _authenticatedPeripheralClients.clear();
+    _peripheralClientConnectedAt.clear();
     _noiseSessionManager.clear();
     _emitPeerUpdate();
   }
@@ -220,18 +244,38 @@ class BleTransport extends Transport {
 
       ble_p.BlePeripheral.setWriteRequestCallback(
         (deviceId, characteristicId, offset, value) {
-          // M4: Enforce peripheral-side connection limit.
-          _peripheralClients.add(deviceId);
-          if (_peripheralClients.length > config.maxConnections) {
-            _log('Peripheral connection limit reached — ignoring write from $deviceId');
-            return null;
+          // M4: Track peripheral clients with timestamps for eviction (HIGH-2).
+          final now = DateTime.now();
+          if (!_peripheralClients.containsKey(deviceId)) {
+            // New peripheral client — enforce connection limit.
+            if (_peripheralClients.length >= config.maxConnections) {
+              _log('Peripheral connection limit reached — ignoring write from $deviceId');
+              return null;
+            }
+            _peripheralClientConnectedAt[deviceId] = now;
           }
-          _log('Received write from $deviceId, char=$characteristicId, len=${value?.length}');
+          _peripheralClients[deviceId] = now; // Update last-write time
+          _log('Received write, char=$characteristicId, len=${value?.length}');
           if (value != null) {
             _handleIncomingData(Uint8List.fromList(value), fromDeviceId: deviceId);
           }
           return null;
         },
+      );
+
+      // HIGH-2: Periodically evict peripheral clients that haven't written
+      // in 60 seconds (stale connections that never disconnected cleanly).
+      _peripheralClientCleanupTimer?.cancel();
+      _peripheralClientCleanupTimer = Timer.periodic(
+        const Duration(seconds: 30),
+        (_) => _evictStalePeripheralClients(),
+      );
+
+      // MED-7: Periodically enforce handshake timeout for peripheral clients.
+      _handshakeTimeoutTimer?.cancel();
+      _handshakeTimeoutTimer = Timer.periodic(
+        const Duration(seconds: 15),
+        (_) => _checkHandshakeTimeouts(),
       );
 
       await ble_p.BlePeripheral.addService(
@@ -241,14 +285,15 @@ class BleTransport extends Transport {
           characteristics: [
             ble_p.BleCharacteristic(
               uuid: packetCharUuidStr,
+              // MED-2: Only expose write and notify properties.
+              // Removing 'read'/'readable' prevents passive observers from
+              // polling the last characteristic value without subscribing.
               properties: [
                 ble_p.CharacteristicProperties.write.index,
                 ble_p.CharacteristicProperties.writeWithoutResponse.index,
                 ble_p.CharacteristicProperties.notify.index,
-                ble_p.CharacteristicProperties.read.index,
               ],
               permissions: [
-                ble_p.AttributePermissions.readable.index,
                 ble_p.AttributePermissions.writeable.index,
               ],
             ),
@@ -409,62 +454,56 @@ class BleTransport extends Transport {
     }
 
     _connectingDevices.add(deviceId);
-    _log('Attempting to connect to $deviceId...');
+    _log('Attempting to connect...');
 
+    // HIGH-7: Use try/finally to ensure _connectingDevices is always cleaned up.
     try {
       await result.device.connect(
         timeout: Duration(milliseconds: config.connectionTimeoutMs),
       );
-      _log('SUCCESS: Connected to $deviceId');
+      _log('SUCCESS: Connected');
 
       // Negotiate larger MTU for mesh packets (header 78 + payload + sig 64)
       try {
         final mtu = await result.device.requestMtu(512);
         _deviceMtu[deviceId] = mtu;
-        _log('Negotiated MTU: $mtu for $deviceId');
+        _log('Negotiated MTU: $mtu');
         if (mtu < 256) {
-          _log('WARNING: MTU $mtu < 256 for $deviceId — large packets may be silently truncated');
+          _log('WARNING: MTU $mtu < 256 — large packets may be silently truncated');
         }
       } catch (e) {
         // L1: MTU negotiation failed — 23 bytes is too small for any Fluxon
         // packet (min 142 bytes). Disconnect rather than silently truncate.
-        _log('ERROR: MTU negotiation failed for $deviceId — disconnecting: $e');
-        _connectingDevices.remove(deviceId);
+        _log('ERROR: MTU negotiation failed — disconnecting: $e');
         await result.device.disconnect();
-        return;
+        return; // _connectingDevices removed in finally
       }
 
-      _log('Discovering services on $deviceId...');
+      _log('Discovering services...');
       final services = await result.device.discoverServices();
-      _log('Found ${services.length} services on $deviceId');
+      _log('Found ${services.length} services');
 
       final service = services.where((s) => s.uuid == serviceUuid).firstOrNull;
       if (service == null) {
-        _log('No Fluxon service on $deviceId — disconnecting');
-        for (final s in services) {
-          _log('  - Service: ${s.uuid}');
-        }
+        _log('No Fluxon service — disconnecting');
         await result.device.disconnect();
-        _connectingDevices.remove(deviceId);
-        return;
+        return; // _connectingDevices removed in finally
       }
 
-      _log('Found Fluxon service on $deviceId');
+      _log('Found Fluxon service');
       final char = service.characteristics
           .where((c) => c.uuid == packetCharUuid)
           .firstOrNull;
       if (char == null) {
-        _log('ERROR: Characteristic not found on $deviceId — disconnecting');
+        _log('ERROR: Characteristic not found — disconnecting');
         await result.device.disconnect();
-        _connectingDevices.remove(deviceId);
-        return;
+        return; // _connectingDevices removed in finally
       }
 
       _log('Found characteristic, subscribing to notifications...');
       _peerCharacteristics[deviceId] = char;
       await char.setNotifyValue(true);
       char.onValueReceived.listen((data) {
-        _log('Received notification from $deviceId, len=${data.length}');
         _handleIncomingData(Uint8List.fromList(data), fromDeviceId: deviceId);
       });
 
@@ -478,7 +517,6 @@ class BleTransport extends Transport {
       _initiateNoiseHandshake(deviceId);
 
       result.device.connectionState.listen((state) {
-        _log('Device $deviceId state: $state');
         if (state == BluetoothConnectionState.disconnected) {
           _noiseSessionManager.removeSession(deviceId);
 
@@ -493,12 +531,56 @@ class BleTransport extends Transport {
           _peerCharacteristics.remove(deviceId);
           _connectingDevices.remove(deviceId);
           _deviceMtu.remove(deviceId);
+          // HIGH-2: Also remove from peripheral client maps on disconnect
+          _peripheralClients.remove(deviceId);
+          _authenticatedPeripheralClients.remove(deviceId);
+          _peripheralClientConnectedAt.remove(deviceId);
           _emitPeerUpdate();
         }
       });
     } catch (e) {
-      _log('ERROR connecting to $deviceId: $e');
+      _log('ERROR connecting: $e');
+    } finally {
+      // HIGH-7: Always remove from connecting set, even if connection succeeded
+      // (the device has either moved to _connectedDevices or failed entirely).
       _connectingDevices.remove(deviceId);
+    }
+  }
+
+  /// HIGH-2: Evict peripheral clients that haven't written in 60 seconds.
+  void _evictStalePeripheralClients() {
+    final cutoff = DateTime.now().subtract(const Duration(seconds: 60));
+    _peripheralClients.removeWhere((deviceId, lastWrite) {
+      if (lastWrite.isBefore(cutoff)) {
+        _authenticatedPeripheralClients.remove(deviceId);
+        _peripheralClientConnectedAt.remove(deviceId);
+        _log('Evicted stale peripheral client');
+        return true;
+      }
+      return false;
+    });
+  }
+
+  /// MED-7: Disconnect peripheral clients that haven't completed a Noise
+  /// handshake within 30 seconds of connecting.
+  void _checkHandshakeTimeouts() {
+    final cutoff = DateTime.now().subtract(const Duration(seconds: 30));
+    final timedOut = <String>[];
+    for (final entry in _peripheralClientConnectedAt.entries) {
+      final deviceId = entry.key;
+      final connectedAt = entry.value;
+      if (connectedAt.isBefore(cutoff) &&
+          !_authenticatedPeripheralClients.contains(deviceId)) {
+        timedOut.add(deviceId);
+      }
+    }
+    for (final deviceId in timedOut) {
+      SecureLogger.warning(
+        'Handshake timeout — removing unauthenticated peripheral client',
+        category: 'BLE',
+      );
+      _peripheralClients.remove(deviceId);
+      _peripheralClientConnectedAt.remove(deviceId);
     }
   }
 
@@ -575,20 +657,36 @@ class BleTransport extends Transport {
       }
     });
 
-    // Also notify via peripheral (GATT server) to any connected centrals.
-    final peripheralFuture = () async {
+    // CRIT-1 + MED-5: Only notify authenticated peripheral clients via GATT
+    // server. Send per-client encrypted data, never unencrypted plaintext.
+    // If there are no authenticated peripheral clients, skip the update entirely.
+    final authenticatedPeripheral = _authenticatedPeripheralClients.toList();
+    final peripheralFutures = authenticatedPeripheral.map((deviceId) async {
       try {
+        var sendData = data;
+        if (_noiseSessionManager.hasSession(deviceId)) {
+          final encrypted = _noiseSessionManager.encrypt(data, deviceId);
+          if (encrypted != null) {
+            sendData = encrypted;
+          } else {
+            // Session exists but encrypt returned null (rekey needed) — skip
+            return;
+          }
+        } else {
+          // Client in authenticated set but no session — should not happen;
+          // skip rather than send plaintext.
+          return;
+        }
         await ble_p.BlePeripheral.updateCharacteristic(
           characteristicId: packetCharUuidStr,
-          value: data,
+          value: sendData,
         );
-        _log('Updated peripheral characteristic');
       } catch (e) {
-        _log('Failed to update characteristic: $e');
+        _log('Failed to update peripheral characteristic: $e');
       }
-    }();
+    });
 
-    await Future.wait([...centralFutures, peripheralFuture]);
+    await Future.wait([...centralFutures, ...peripheralFutures]);
   }
 
   // ---------------------------------------------------------------------------
@@ -601,22 +699,35 @@ class BleTransport extends Transport {
   }) async {
     // H7: Reject data outside valid size range before any processing.
     if (data.isEmpty || data.length > 4096) {
-      _log('Invalid data length ${data.length} from $fromDeviceId — dropping');
+      _log('Rejecting oversized data from device — dropping');
+      return;
+    }
+
+    // HIGH-1: Global cross-device rate limiter using monotonic wall-clock window.
+    final now = DateTime.now();
+    final windowElapsed = now.difference(_globalRateWindowStart).inMilliseconds;
+    if (windowElapsed >= 1000) {
+      _globalPacketCount = 0;
+      _globalRateWindowStart = now;
+    }
+    _globalPacketCount++;
+    if (_globalPacketCount > _maxGlobalPacketsPerSecond) {
+      _log('Global rate limit exceeded — dropping packet');
       return;
     }
 
     // H3: Per-device rate limiting (max 20 packets/sec).
-    final now = DateTime.now();
-    final lastTime = _lastPacketTime[fromDeviceId];
+    // Bound rate limiting to authenticated peer ID post-handshake where possible.
+    final deviceRateKey = _deviceToPeerHex[fromDeviceId] ?? fromDeviceId;
+    final lastTime = _lastPacketTime[deviceRateKey];
     if (lastTime != null &&
         now.difference(lastTime).inMilliseconds < _minPacketIntervalMs) {
-      _log('Rate limiting $fromDeviceId — dropping packet');
-      return;
+      return; // Silently drop — don't log to avoid timing oracle
     }
-    _lastPacketTime[fromDeviceId] = now;
+    _lastPacketTime[deviceRateKey] = now;
 
     _lastActivityTimestamp = now;
-    _log('Handling incoming data from $fromDeviceId, len=${data.length}');
+    _log('Handling incoming data, len=${data.length}');
 
     // Try Noise decryption first if a session is established
     Uint8List packetData = data;
@@ -652,7 +763,7 @@ class BleTransport extends Transport {
     }
 
     if (packet == null) {
-      _log('Failed to decode packet from $fromDeviceId');
+      _log('Failed to decode packet');
       return;
     }
 
@@ -661,6 +772,21 @@ class BleTransport extends Transport {
     if (packet.type == MessageType.handshake) {
       await _handleHandshakePacket(fromDeviceId, packet);
       return; // Don't emit handshake packets to app layer
+    }
+
+    // CRIT-2: Validate that the packet's sourceId matches the authenticated
+    // peer identity for this BLE connection. An authenticated peer cannot
+    // forge packets claiming to originate from a different peer ID.
+    final authenticatedPeerHex = _deviceToPeerHex[fromDeviceId];
+    if (authenticatedPeerHex != null) {
+      final packetSourceHex = HexUtils.encode(packet.sourceId);
+      if (packetSourceHex != authenticatedPeerHex) {
+        SecureLogger.warning(
+          'Source ID mismatch: packet claims different origin than authenticated peer — dropping',
+          category: 'BLE',
+        );
+        return;
+      }
     }
 
     // C3: Verify Ed25519 signature on non-handshake packets.
@@ -684,7 +810,7 @@ class BleTransport extends Transport {
       return;
     }
 
-    _log('Valid packet received from ${HexUtils.encode(packet.sourceId)}');
+    _log('Valid packet received, type=${packet.type.name}');
     _packetController.add(packet);
   }
 
@@ -733,17 +859,20 @@ class BleTransport extends Transport {
       _deviceToPeerHex[fromDeviceId] = remotePeerIdHex;
       _peerHexToDevice[remotePeerIdHex] = fromDeviceId;
 
-      // Update the peer connection with the real peer ID and signing key
-      final existingConnection = _peerConnections[fromDeviceId];
-      if (existingConnection != null) {
-        _peerConnections[fromDeviceId] = PeerConnection(
-          peerId: remotePeerIdBytes,
-          rssi: existingConnection.rssi,
-          signingPublicKey: responseAndKey.remoteSigningPublicKey,
-        );
-      }
+      // CRIT-1: Mark this device as an authenticated peripheral client so it
+      // can receive encrypted GATT notifications.
+      _authenticatedPeripheralClients.add(fromDeviceId);
 
-      _log('Handshake complete with $fromDeviceId, peer ID = $remotePeerIdHex');
+      // Update the peer connection with the real peer ID and signing key
+      final existingConnection = _peerConnections[fromDeviceId] ??
+          PeerConnection(peerId: Uint8List(32), rssi: 0);
+      _peerConnections[fromDeviceId] = PeerConnection(
+        peerId: remotePeerIdBytes,
+        rssi: existingConnection.rssi,
+        signingPublicKey: responseAndKey.remoteSigningPublicKey,
+      );
+
+      _log('Handshake complete');
       _emitPeerUpdate();
     }
   }

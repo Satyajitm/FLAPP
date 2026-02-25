@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:typed_data';
+import '../../shared/hex_utils.dart';
 import '../protocol/packet.dart';
 import '../transport/transport.dart';
 
@@ -61,10 +62,14 @@ class GossipSyncManager {
     }
   }
 
+  /// MED-8: Rate-limit tracking for gossip sync responses per peer (keyed by hex peer ID).
+  final Map<String, _SyncRateState> _syncRateByPeer = {};
+
   /// Handle a sync request from a peer.
   ///
-  /// The request contains a set of packet IDs the peer already has.
-  /// We respond with packets the peer is missing.
+  /// MED-8: Rate-limited — max [config.maxSyncPacketsPerRequest] packets per
+  /// sync round per peer. Only authenticated peers should call this; the
+  /// caller (MeshService) is responsible for enforcing authentication.
   Future<void> handleSyncRequest({
     required Uint8List fromPeerId,
     required Set<String> peerHasIds,
@@ -72,9 +77,24 @@ class GossipSyncManager {
     final now = DateTime.now();
     final cutoff = now.subtract(Duration(seconds: config.maxMessageAgeSeconds));
 
+    // MED-8: Enforce per-peer sync response rate limit.
+    final peerKey = HexUtils.encode(fromPeerId);
+    final rateState = _syncRateByPeer.putIfAbsent(
+      peerKey, () => _SyncRateState(),
+    );
+    if (now.difference(rateState.windowStart).inSeconds >= 60) {
+      rateState.count = 0;
+      rateState.windowStart = now;
+    }
+
+    int sent = 0;
     for (final entry in _seenPackets.entries) {
+      if (sent >= config.maxSyncPacketsPerRequest) break;
       if (peerHasIds.contains(entry.key)) continue;
       if (entry.value.seenAt.isBefore(cutoff)) continue;
+
+      rateState.count++;
+      sent++;
 
       // Send missing packet to the requesting peer
       final packet = entry.value.packet.withDecrementedTTL();
@@ -117,6 +137,12 @@ class _StoredPacket {
   _StoredPacket({required this.packet, required this.seenAt});
 }
 
+/// MED-8: Tracks sync response rate per peer to prevent bandwidth amplification.
+class _SyncRateState {
+  int count = 0;
+  DateTime windowStart = DateTime.now();
+}
+
 /// Configuration for gossip sync.
 class GossipSyncConfig {
   /// Maximum number of packets to track for sync.
@@ -131,10 +157,14 @@ class GossipSyncConfig {
   /// Interval between sync rounds (seconds).
   final int syncIntervalSeconds;
 
+  /// MED-8: Maximum packets sent per sync request per peer (bandwidth cap).
+  final int maxSyncPacketsPerRequest;
+
   const GossipSyncConfig({
     this.seenCapacity = 1000,
     this.maxMessageAgeSeconds = 900, // 15 minutes
     this.maintenanceIntervalSeconds = 60,
     this.syncIntervalSeconds = 15,
+    this.maxSyncPacketsPerRequest = 20,
   });
 }

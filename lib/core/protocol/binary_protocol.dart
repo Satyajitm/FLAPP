@@ -1,7 +1,10 @@
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 import 'packet.dart';
 import 'message_types.dart';
+
+final _secureRandom = Random.secure();
 
 /// Decoded chat payload — contains sender display name and message text.
 class ChatPayload {
@@ -36,7 +39,14 @@ class BinaryProtocol {
   /// both the sender name and text. Legacy plain-text payloads return an
   /// empty [senderName].
   static ChatPayload decodeChatPayload(Uint8List payload) {
-    final raw = utf8.decode(payload, allowMalformed: true);
+    // MED-6: Reject malformed UTF-8 to prevent encoding confusion and
+    // homoglyph attacks. Return empty payload on invalid bytes.
+    final String raw;
+    try {
+      raw = utf8.decode(payload, allowMalformed: false);
+    } catch (_) {
+      return const ChatPayload(senderName: '', text: '');
+    }
     // Fix: Use strict key-presence checks instead of a string prefix match
     // to prevent JSON injection via crafted payload content.
     try {
@@ -247,18 +257,23 @@ class BinaryProtocol {
   }
 
   /// Build a complete FluxonPacket from components.
+  ///
+  /// MED-1: When [flags] is not explicitly provided, a random 8-bit nonce is
+  /// generated and stored in [flags]. This ensures packets of the same type
+  /// from the same source within the same millisecond get distinct [packetId]s,
+  /// preventing legitimate rapid-fire packets from being deduped as one.
   static FluxonPacket buildPacket({
     required MessageType type,
     required Uint8List sourceId,
     Uint8List? destId,
     required Uint8List payload,
     int ttl = FluxonPacket.maxTTL,
-    int flags = 0,
+    int? flags,
   }) {
     return FluxonPacket(
       type: type,
       ttl: ttl,
-      flags: flags,
+      flags: flags ?? _secureRandom.nextInt(256),
       timestamp: DateTime.now().millisecondsSinceEpoch,
       sourceId: sourceId,
       destId: destId ?? Uint8List(32), // all zeros = broadcast

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 import 'dart:typed_data';
 import '../../../core/identity/group_manager.dart';
 import '../../../core/identity/peer_id.dart';
@@ -94,18 +95,23 @@ class MeshEmergencyRepository implements EmergencyRepository {
       if (encrypted != null) payload = encrypted;
     }
 
-    final packet = BinaryProtocol.buildPacket(
-      type: MessageType.emergencyAlert,
-      sourceId: _myPeerId.bytes,
-      payload: payload,
-      ttl: FluxonPacket.maxTTL,
-    );
-
-    // Broadcast multiple times for reliability
+    // HIGH-5: Generate a distinct packet for each rebroadcast so receiving
+    // peers' deduplicators treat each transmission as unique. This provides
+    // true N-attempt reliability instead of only 1-attempt with N broadcasts.
+    // Random jitter on the delay also reduces traffic-analysis fingerprinting.
+    final rng = Random.secure();
     for (var i = 0; i < _config.emergencyRebroadcastCount; i++) {
+      final packet = BinaryProtocol.buildPacket(
+        type: MessageType.emergencyAlert,
+        sourceId: _myPeerId.bytes,
+        payload: payload,
+        ttl: FluxonPacket.maxTTL,
+      );
       await _transport.broadcastPacket(packet);
       if (i < _config.emergencyRebroadcastCount - 1) {
-        await Future.delayed(const Duration(milliseconds: 500));
+        // Add random jitter (400–600 ms) to reduce timing fingerprint.
+        final jitter = 400 + rng.nextInt(201);
+        await Future.delayed(Duration(milliseconds: jitter));
       }
     }
   }

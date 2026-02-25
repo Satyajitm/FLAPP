@@ -115,7 +115,11 @@ class ChatController extends StateNotifier<ChatState> {
 
   Future<void> _handleReceipt(ReceiptEvent receipt) async {
     final messages = [...state.messages];
-    final index = messages.indexWhere((m) => m.id == receipt.originalMessageId);
+    // Match using sender:timestamp key (stable, independent of per-packet flags).
+    final index = messages.indexWhere(
+      (m) => '${m.sender.hex}:${m.timestamp.millisecondsSinceEpoch}' ==
+          receipt.originalMessageId,
+    );
     if (index == -1) return;
 
     final msg = messages[index];
