@@ -1,5 +1,52 @@
 # FluxonApp — Changelog
 
+---
+
+## [v5.1] — Emergency Feature Deep-Dive Audit (V11)
+**Date:** 2026-02-26
+**Branch:** `Major_Security_Fixes`
+**Status:** Complete — 805/805 tests passing · Zero compile errors
+
+### Summary
+Full resolution of all findings from `security_audit/DEEP_DIVE_V11_EMERGENCY.md` — a focused audit of the emergency feature (`emergency_controller.dart`, `mesh_emergency_repository.dart`, `binary_protocol.dart`, `emergency_providers.dart`). Two HIGHs, three MEDIUMs, and two LOWs fixed.
+
+---
+
+### Security & Correctness Fixes
+
+#### EMG-H1 [HIGH] — Unbounded `alerts` list — remote memory exhaustion via alert flood — `lib/features/emergency/emergency_controller.dart`
+Every incoming emergency packet spread-copied the full `state.alerts` list with no cap, creating O(n²) memory cost. A BLE-range attacker spoofing distinct `sourceId` bytes could exhaust heap memory and crash the app. Fixed: `_maxAlerts = 200` cap applied identically on both the incoming-alert path in `_listenForAlerts` and the local-send path in `_doSend`, matching the existing pattern in `chat_controller.dart`.
+
+#### EMG-H2 [HIGH] — Unknown `alertType` byte silently coerced to SOS — `lib/features/emergency/data/mesh_emergency_repository.dart`
+`EmergencyAlertType.fromValue(payload.alertType) ?? EmergencyAlertType.sos` promoted any byte in range 4–255 to SOS severity. A modified client could manufacture false high-urgency SOS alerts using arbitrary unknown type bytes. Fixed: unknown alert types are now rejected with an early `return` and a `SecureLogger.warning` log line recording the raw byte value.
+
+#### EMG-M1 [MEDIUM] — Concurrent `sendAlert` calls clobber `_pendingAlert` — `lib/features/emergency/emergency_controller.dart`
+`sendAlert` had no guard against concurrent invocation. A second call before the first `_doSend` completed would overwrite `_pendingAlert`, causing the state to confirm the wrong alert type. Fixed: `if (state.isSending) return;` guard added at the top of `sendAlert`.
+
+#### EMG-M2 [MEDIUM] — Rebroadcast loop reused single encrypted payload — fragile nonce pattern — `lib/features/emergency/data/mesh_emergency_repository.dart`
+The payload was encrypted once before the `for` loop and the same ciphertext (same nonce) broadcast in each iteration. If `GroupCipher.encrypt` ever produces a deterministic nonce (key rotation counter reset, future refactor), all N captures XOR to the keystream, recovering plaintext location data. Fixed: encryption call moved inside the loop so each iteration encrypts the plaintext independently with a fresh nonce.
+
+#### EMG-M3 [MEDIUM] — Emergency alert `message` field had no length cap at encode time — `lib/core/protocol/binary_protocol.dart`
+`encodeEmergencyPayload` accepted an unbounded `String message`. A call with a 500-character message produced a 519-byte payload exceeding the 512-byte packet cap. Fixed: `_maxEmergencyMessageBytes = 493` constant added; raw UTF-8 bytes are truncated to this limit before buffer allocation.
+
+#### EMG-L1 [LOW] — `_doSend` catch block silently discarded exception — `lib/features/emergency/emergency_controller.dart`
+`catch (_)` set error state but emitted no diagnostic output, unlike other controllers in the codebase. Fixed: changed to `catch (e)` with a `SecureLogger.warning('EmergencyController: sendAlert failed: $e')` call before the disposed guard.
+
+#### EMG-L2 [LOW] — Double-dispose risk in `MeshEmergencyRepository` — `lib/features/emergency/data/mesh_emergency_repository.dart`
+Both `emergencyRepositoryProvider.onDispose` and `EmergencyController.dispose()` called `_repository.dispose()`. Riverpod disposes the controller first (which calls `repository.dispose()`), then the provider's `onDispose` (which calls it again). Calling `_alertController.close()` on an already-closed `StreamController` throws a `StateError`. Fixed: `_disposed` bool guard added to `MeshEmergencyRepository.dispose()`.
+
+---
+
+### Files Changed
+
+| File | Change |
+|---|---|
+| `lib/features/emergency/emergency_controller.dart` | Added `SecureLogger` import; `_maxAlerts = 200` cap on both alert paths; `isSending` concurrent-send guard; `SecureLogger.warning` in catch block |
+| `lib/features/emergency/data/mesh_emergency_repository.dart` | Unknown alertType rejection; encryption moved inside rebroadcast loop; `_disposed` double-dispose guard |
+| `lib/core/protocol/binary_protocol.dart` | `_maxEmergencyMessageBytes = 493` truncation in `encodeEmergencyPayload` |
+
+---
+
 All notable changes to FluxonApp are documented here, organized by version and phase.
 Each entry records **what** changed, **which files** were affected, and **why** the decision was made.
 

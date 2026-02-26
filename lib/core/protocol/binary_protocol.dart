@@ -126,13 +126,21 @@ class BinaryProtocol {
   /// Encode an emergency alert payload.
   ///
   /// Format: [alertType:1][latitude:8][longitude:8][messageLen:2][message:N]
+  /// Maximum message bytes in an emergency payload: 512 (max payload) − 19 (fixed header).
+  static const _maxEmergencyMessageBytes = 493;
+
   static Uint8List encodeEmergencyPayload({
     required int alertType,
     required double latitude,
     required double longitude,
     String message = '',
   }) {
-    final msgBytes = utf8.encode(message);
+    // MEDIUM: Truncate at encode time to guarantee the total payload never
+    // exceeds the 512-byte packet cap, preventing oversized-packet errors.
+    final rawBytes = utf8.encode(message);
+    final msgBytes = rawBytes.length > _maxEmergencyMessageBytes
+        ? rawBytes.sublist(0, _maxEmergencyMessageBytes)
+        : rawBytes;
     final buffer = ByteData(19 + msgBytes.length);
     buffer.setUint8(0, alertType);
     buffer.setFloat64(1, latitude);

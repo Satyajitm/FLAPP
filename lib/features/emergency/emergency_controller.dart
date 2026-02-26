@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/identity/peer_id.dart';
+import '../../shared/logger.dart';
 import 'data/emergency_repository.dart';
 
 /// Emergency alert types.
@@ -118,9 +119,17 @@ class EmergencyController extends StateNotifier<EmergencyState> {
     _listenForAlerts();
   }
 
+  /// Maximum number of alerts retained in state to prevent unbounded memory growth.
+  static const _maxAlerts = 200;
+
   void _listenForAlerts() {
     _alertSub = _repository.onAlertReceived.listen((alert) {
-      state = state.copyWith(alerts: [...state.alerts, alert]);
+      final updated = [...state.alerts, alert];
+      state = state.copyWith(
+        alerts: updated.length > _maxAlerts
+            ? updated.sublist(updated.length - _maxAlerts)
+            : updated,
+      );
     });
   }
 
@@ -134,6 +143,10 @@ class EmergencyController extends StateNotifier<EmergencyState> {
     required double longitude,
     String message = '',
   }) async {
+    // Drop concurrent send attempts — prevents _pendingAlert clobber and
+    // interleaved rebroadcast loops.
+    if (state.isSending) return;
+
     _pendingAlert = _PendingAlert(
       type: type,
       latitude: latitude,
@@ -192,13 +205,17 @@ class EmergencyController extends StateNotifier<EmergencyState> {
       );
 
       _pendingAlert = null;
+      final updatedAlerts = [...state.alerts, emergencyAlert];
       state = state.copyWith(
-        alerts: [...state.alerts, emergencyAlert],
+        alerts: updatedAlerts.length > _maxAlerts
+            ? updatedAlerts.sublist(updatedAlerts.length - _maxAlerts)
+            : updatedAlerts,
         isSending: false,
         hasSendError: false,
         retryCount: 0,
       );
-    } catch (_) {
+    } catch (e) {
+      SecureLogger.warning('EmergencyController: sendAlert failed: $e');
       if (_isDisposed) return;
       state = state.copyWith(isSending: false, hasSendError: true);
     }

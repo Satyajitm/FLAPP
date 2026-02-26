@@ -24,6 +24,7 @@ class MeshEmergencyRepository implements EmergencyRepository {
   final StreamController<EmergencyAlert> _alertController =
       StreamController<EmergencyAlert>.broadcast();
   StreamSubscription? _packetSub;
+  bool _disposed = false;
 
   MeshEmergencyRepository({
     required Transport transport,
@@ -60,9 +61,20 @@ class MeshEmergencyRepository implements EmergencyRepository {
     final payload = BinaryProtocol.decodeEmergencyPayload(rawPayload);
     if (payload == null) return;
 
+    // HIGH: Reject packets with unrecognised alert types instead of silently
+    // coercing them to SOS, which could be exploited to manufacture false
+    // high-urgency alerts using arbitrary alertType byte values.
+    final alertType = EmergencyAlertType.fromValue(payload.alertType);
+    if (alertType == null) {
+      SecureLogger.warning(
+        'MeshEmergencyRepository: dropping packet with unknown alertType 0x${payload.alertType.toRadixString(16).padLeft(2, '0')}',
+      );
+      return;
+    }
+
     final alert = EmergencyAlert(
       sender: PeerId(packet.sourceId),
-      type: EmergencyAlertType.fromValue(payload.alertType) ?? EmergencyAlertType.sos,
+      type: alertType,
       latitude: payload.latitude,
       longitude: payload.longitude,
       message: payload.message,
@@ -82,29 +94,31 @@ class MeshEmergencyRepository implements EmergencyRepository {
     required double longitude,
     String message = '',
   }) async {
-    var payload = BinaryProtocol.encodeEmergencyPayload(
+    final plainPayload = BinaryProtocol.encodeEmergencyPayload(
       alertType: type.value,
       latitude: latitude,
       longitude: longitude,
       message: message,
     );
 
-    // Encrypt with group key if in a group
-    if (_groupManager.isInGroup) {
-      final encrypted = _groupManager.encryptForGroup(payload, messageType: MessageType.emergencyAlert);
-      if (encrypted != null) payload = encrypted;
-    }
-
-    // HIGH-5: Generate a distinct packet for each rebroadcast so receiving
-    // peers' deduplicators treat each transmission as unique. This provides
-    // true N-attempt reliability instead of only 1-attempt with N broadcasts.
-    // Random jitter on the delay also reduces traffic-analysis fingerprinting.
+    // MEDIUM: Encrypt fresh each iteration so each rebroadcast uses an
+    // independent nonce, preventing multi-capture XOR keystream recovery.
+    // Random jitter on the delay also reduces timing-analysis fingerprinting.
     final rng = Random.secure();
     for (var i = 0; i < _config.emergencyRebroadcastCount; i++) {
+      var iterPayload = plainPayload;
+      if (_groupManager.isInGroup) {
+        final encrypted = _groupManager.encryptForGroup(
+          iterPayload,
+          messageType: MessageType.emergencyAlert,
+        );
+        if (encrypted != null) iterPayload = encrypted;
+      }
+
       final packet = BinaryProtocol.buildPacket(
         type: MessageType.emergencyAlert,
         sourceId: _myPeerId.bytes,
-        payload: payload,
+        payload: iterPayload,
         ttl: FluxonPacket.maxTTL,
       );
       await _transport.broadcastPacket(packet);
@@ -118,6 +132,10 @@ class MeshEmergencyRepository implements EmergencyRepository {
 
   @override
   void dispose() {
+    // Guard against double-dispose (Riverpod disposes the provider separately
+    // from EmergencyController.dispose(), both calling this method).
+    if (_disposed) return;
+    _disposed = true;
     _packetSub?.cancel();
     _alertController.close();
   }
