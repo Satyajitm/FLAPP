@@ -53,8 +53,17 @@ class FluxonPacket {
   /// MED-1: Include [flags] in the ID so that two packets of the same type
   /// from the same source within the same millisecond get distinct IDs
   /// (flags carries a per-packet random nonce set by [BinaryProtocol.buildPacket]).
+  ///
+  /// PROTO-H1: Include a signature discriminator so that a stripped-signature
+  /// replay of a legitimate packet gets a distinct packetId from the signed
+  /// original. Without this, the deduplicator could be raced to drop the
+  /// legitimate signed variant on a fresh node that receives the unsigned
+  /// replay first.
   String _computePacketId() {
-    return '${HexUtils.encode(sourceId)}:$timestamp:${type.value}:$flags';
+    final sigPrefix = signature != null
+        ? ':${HexUtils.encode(signature!.sublist(0, 8))}'
+        : ':nosig';
+    return '${HexUtils.encode(sourceId)}:$timestamp:${type.value}:$flags$sigPrefix';
   }
 
   /// Create a copy with a signature attached.
@@ -72,7 +81,15 @@ class FluxonPacket {
   }
 
   /// Encode packet to binary wire format (without signature).
+  ///
+  /// PROTO-M2: Throws [ArgumentError] if [payload] exceeds [maxPayloadSize].
+  /// This mirrors the decode-side guard and prevents silent setUint16 truncation
+  /// when payload.length > 65535, which would produce a garbled length field.
   Uint8List encode() {
+    if (payload.length > maxPayloadSize) {
+      throw ArgumentError(
+          'Payload too large: ${payload.length} > $maxPayloadSize');
+    }
     final buffer = ByteData(headerSize + payload.length);
     var offset = 0;
 
@@ -111,6 +128,12 @@ class FluxonPacket {
   /// Decode a packet from binary wire format.
   ///
   /// If [hasSignature] is true, the last 64 bytes are treated as signature.
+  ///
+  /// PROTO-M1 — IMPORTANT: [data] must not be modified after calling decode().
+  /// The returned packet's [sourceId], [destId], [payload], and [signature]
+  /// fields are zero-copy views into [data] via [Uint8List.sublistView].
+  /// Callers must ensure the buffer outlives the returned packet and is not
+  /// reused as a ring-buffer slot until the packet has been fully consumed.
   static FluxonPacket? decode(Uint8List data, {bool hasSignature = true}) {
     final minSize = hasSignature ? headerSize + signatureSize : headerSize;
     if (data.length < minSize) return null;

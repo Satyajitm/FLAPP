@@ -5,7 +5,11 @@ import 'dart:typed_data';
 /// Ported from Bitchat's MessagePadding.
 class MessagePadding {
   /// Pads [data] to the nearest multiple of [blockSize] using PKCS#7.
+  ///
+  /// PROTO-INFO1: [blockSize] must be > 0. A value of 0 causes an
+  /// IntegerDivisionByZeroException from the modulo operation.
   static Uint8List pad(Uint8List data, {int blockSize = 16}) {
+    assert(blockSize > 0, 'blockSize must be positive');
     final padLength = blockSize - (data.length % blockSize);
     final padded = Uint8List(data.length + padLength);
     padded.setAll(0, data);

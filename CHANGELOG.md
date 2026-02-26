@@ -5,6 +5,64 @@ Each entry records **what** changed, **which files** were affected, and **why** 
 
 ---
 
+## [v4.8] — Protocol Layer Deep-Dive Audit (V6)
+**Date:** 2026-02-26
+**Branch:** `Major_Security_Fixes`
+**Status:** Complete — 805/805 tests passing · Zero compile errors
+
+### Summary
+Full resolution of all findings from `security_audit/DEEP_DIVE_V6_PROTOCOL.md` — a focused audit of the protocol layer (`packet.dart`, `binary_protocol.dart`, `padding.dart`) and its cross-module interactions with `ble_transport.dart`. One HIGH, two MEDIUMs, one LOW, and one INFO finding resolved, plus a cross-module HIGH and a bonus latent bug uncovered by the new encode-side payload guard.
+
+---
+
+### Security Fixes
+
+#### PROTO-H1 [HIGH] — Signature not committed into packet ID — `lib/core/protocol/packet.dart`
+`_computePacketId()` previously included only `sourceId:timestamp:type:flags`. A stripped-signature replay of a legitimate packet produced an identical `packetId`, allowing the deduplicator to be raced on a fresh node: the unsigned replay arriving first would be accepted while the signed original would be dropped as a duplicate. Fixed: the packet ID now appends the first 8 bytes of the signature as a hex prefix (`:nosig` for unsigned packets), so signed and unsigned variants of the same header get distinct IDs and cannot collide in the seen-set.
+
+#### Cross-module [HIGH] — Unsigned non-handshake packets accepted pre-session — `lib/core/transport/ble_transport.dart`
+When a Noise session had not yet been established, `_handleIncomingData` fell through to `FluxonPacket.decode(hasSignature: false)` and emitted the resulting packet to the app layer without any Ed25519 check. This was a complete bypass of signature verification for all non-handshake packet types on cold-boot nodes. Fixed: after both decode attempts, if `packet.signature == null` and `packet.type != MessageType.handshake`, the packet is dropped with a `SecureLogger.warning`.
+
+#### PROTO-M1 [MEDIUM] — `sublistView` aliasing — mutable external references — `lib/core/protocol/packet.dart`
+`FluxonPacket.decode()` uses `Uint8List.sublistView` (zero-copy) for `sourceId`, `destId`, `payload`, and `signature`. The returned packet holds aliased references into the caller's buffer. A caller that later reuses or modifies that buffer silently corrupts all live packet fields. The current BLE path is safe (`Uint8List.fromList` copies on ingress), but the contract was undocumented and dangerous for future callers. Fixed: added a prominent doc comment on `decode()` documenting the aliasing contract and forbidding buffer reuse after decode.
+
+#### PROTO-M2 [MEDIUM] — `encode()` and `buildPacket()` accept oversized payloads silently — `lib/core/protocol/packet.dart`, `lib/core/protocol/binary_protocol.dart`
+`FluxonPacket.decode()` correctly rejected `payloadLen > 512`, but `encode()` and `buildPacket()` had no matching guard. A payload of exactly 65536+ bytes caused `setUint16` to silently truncate the length field, producing a garbled wire frame. Fixed: both `encode()` and `buildPacket()` now throw `ArgumentError('Payload too large: N > 512')` when `payload.length > maxPayloadSize`.
+
+#### PROTO-L1 [LOW] — `decodeLocationPayload` and `decodeEmergencyPayload` accept NaN / Infinity — `lib/core/protocol/binary_protocol.dart`
+`decodeLocationPayload` read IEEE 754 `Float64` lat/lon values without validating them. A crafted BLE packet with NaN bit-patterns passed the length guard and produced a `LocationPayload` with `latitude = NaN`, which would crash `flutter_map` rendering and silently disable the 5 m haversine throttle (NaN comparisons always return false). Fixed: both decoders now validate that lat/lon are finite and within range (lat ∈ [−90, 90], lon ∈ [−180, 180]); all float fields checked for NaN/Infinity; returns `null` on failure.
+
+#### PROTO-INFO1 [INFO] — `pad()` accepts `blockSize = 0` — integer division by zero — `lib/core/protocol/padding.dart`
+`MessagePadding.pad` computed `blockSize - (data.length % blockSize)`, which throws `IntegerDivisionByZeroException` when `blockSize == 0`. No call site passes 0 (default is 16), but there was no guard. Fixed: added `assert(blockSize > 0, 'blockSize must be positive')`.
+
+---
+
+### Bonus Bug — Neighbor list not capped on encode side — `lib/core/mesh/mesh_service.dart`
+The new `buildPacket` payload size guard exposed a pre-existing latent bug: `_sendAnnounce` passed the full `_currentPeers` list to `encodeDiscoveryPayload` with no cap. With many peers in the test suite this produced a 16 321-byte payload, throwing `ArgumentError` on every topology announce. The decode side already rejects `neighborCount > 10`; the encode side now truncates to 10 neighbors before encoding, making both sides consistent.
+
+---
+
+### Tests Added
+
+- **`test/core/packet_test.dart`** — +7 tests:
+  - `decode` rejects `payloadLen = 513` (returns null)
+  - `decode` rejects `payloadLen = 65535` (returns null)
+  - `decode` rejects `ttl > maxTTL` (returns null)
+  - `decode` rejects timestamp older than 6 minutes (replay guard)
+  - `encode` throws `ArgumentError` when `payload.length > maxPayloadSize`
+  - Signed and unsigned packets with identical headers produce different `packetId`s (PROTO-H1)
+  - Two unsigned packets with the same header produce the same `packetId`
+
+- **`test/core/padding_test.dart`** — +1 test:
+  - `pad(data, blockSize: 0)` throws `AssertionError` (PROTO-INFO1)
+
+- **`test/core/protocol/binary_protocol_location_test.dart`** — new file, 14 tests:
+  - `decodeLocationPayload`: valid coordinates round-trip; NaN lat returns null; +Infinity lat returns null; −Infinity lat returns null; NaN lon returns null; lat < −90 returns null; lat > 90 returns null; lon < −180 returns null; lon > 180 returns null; boundary values (±90, ±180) accepted; data < 32 bytes returns null
+  - `decodeEmergencyPayload`: valid payload decodes; NaN lat returns null; Infinity lon returns null; lat > 90 returns null; lon < −180 returns null
+  - `buildPacket`: throws `ArgumentError` for payload > 512 bytes
+
+---
+
 ## [v4.7] — Integration Bug Fixes
 **Date:** 2026-02-25
 **Branch:** `Major_Security_Fixes`

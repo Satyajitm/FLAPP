@@ -46,6 +46,14 @@ void main() {
         expect(padded[1], 20);
         expect(padded[2], 30);
       });
+
+      test('blockSize = 0 throws AssertionError (PROTO-INFO1)', () {
+        // assert(blockSize > 0) must fire in debug mode.
+        expect(
+          () => MessagePadding.pad(Uint8List(4), blockSize: 0),
+          throwsA(isA<AssertionError>()),
+        );
+      });
     });
 
     group('unpad', () {

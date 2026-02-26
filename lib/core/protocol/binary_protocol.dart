@@ -89,16 +89,37 @@ class BinaryProtocol {
   }
 
   /// Decode a location update payload.
+  ///
+  /// PROTO-L1: Validates coordinate ranges and rejects NaN / Infinity values
+  /// that could crash flutter_map rendering or disable the haversine throttle.
   static LocationPayload? decodeLocationPayload(Uint8List data) {
     if (data.length < 32) return null;
     final buffer = ByteData.sublistView(data);
+    final latitude = buffer.getFloat64(0);
+    final longitude = buffer.getFloat64(8);
+    final accuracy = buffer.getFloat32(16);
+    final altitude = buffer.getFloat32(20);
+    final speed = buffer.getFloat32(24);
+    final bearing = buffer.getFloat32(28);
+
+    if (latitude.isNaN || latitude.isInfinite || latitude < -90 || latitude > 90) {
+      return null;
+    }
+    if (longitude.isNaN || longitude.isInfinite || longitude < -180 || longitude > 180) {
+      return null;
+    }
+    if (accuracy.isNaN || accuracy.isInfinite) return null;
+    if (altitude.isNaN || altitude.isInfinite) return null;
+    if (speed.isNaN || speed.isInfinite) return null;
+    if (bearing.isNaN || bearing.isInfinite) return null;
+
     return LocationPayload(
-      latitude: buffer.getFloat64(0),
-      longitude: buffer.getFloat64(8),
-      accuracy: buffer.getFloat32(16),
-      altitude: buffer.getFloat32(20),
-      speed: buffer.getFloat32(24),
-      bearing: buffer.getFloat32(28),
+      latitude: latitude,
+      longitude: longitude,
+      accuracy: accuracy,
+      altitude: altitude,
+      speed: speed,
+      bearing: bearing,
     );
   }
 
@@ -129,6 +150,13 @@ class BinaryProtocol {
     final alertType = buffer.getUint8(0);
     final latitude = buffer.getFloat64(1);
     final longitude = buffer.getFloat64(9);
+    // PROTO-L1: Reject NaN / Infinity and out-of-range coordinates.
+    if (latitude.isNaN || latitude.isInfinite || latitude < -90 || latitude > 90) {
+      return null;
+    }
+    if (longitude.isNaN || longitude.isInfinite || longitude < -180 || longitude > 180) {
+      return null;
+    }
     final msgLen = buffer.getUint16(17);
     if (data.length < 19 + msgLen) return null;
     // INFO-N1: Use allowMalformed: false to reject malformed UTF-8 sequences
@@ -277,6 +305,11 @@ class BinaryProtocol {
     int ttl = FluxonPacket.maxTTL,
     int? flags,
   }) {
+    // PROTO-M2: Guard oversized payloads before constructing the packet.
+    if (payload.length > FluxonPacket.maxPayloadSize) {
+      throw ArgumentError(
+          'Payload too large: ${payload.length} > ${FluxonPacket.maxPayloadSize}');
+    }
     return FluxonPacket(
       type: type,
       ttl: ttl,

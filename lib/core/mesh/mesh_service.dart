@@ -383,7 +383,12 @@ class MeshService implements Transport {
   ///
   /// Both packets carry the same neighbor-list payload; only the [type] differs.
   Future<void> _sendAnnounce(MessageType type) async {
-    final neighborIds = _currentPeers.map((p) => p.peerId).toList();
+    // Cap neighbor list to the protocol maximum (matches the decode-side guard
+    // in decodeDiscoveryPayload which rejects neighborCount > 10).
+    final allNeighborIds = _currentPeers.map((p) => p.peerId).toList();
+    final neighborIds = allNeighborIds.length > 10
+        ? allNeighborIds.sublist(0, 10)
+        : allNeighborIds;
     final payload = BinaryProtocol.encodeDiscoveryPayload(
       neighbors: neighborIds,
     );

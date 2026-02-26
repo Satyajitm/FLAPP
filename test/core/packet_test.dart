@@ -155,6 +155,142 @@ void main() {
     });
   });
 
+  group('decode — security guards', () {
+    test('payloadLen > maxPayloadSize (513) returns null', () {
+      // Build a raw buffer that claims payloadLen = 513 but has no actual payload.
+      final buf = ByteData(FluxonPacket.headerSize);
+      buf.setUint8(0, FluxonPacket.version);
+      buf.setUint8(1, MessageType.chat.value);
+      buf.setUint8(2, 5); // ttl
+      buf.setUint8(3, 0); // flags
+      buf.setInt64(4, DateTime.now().millisecondsSinceEpoch);
+      // sourceId + destId stay zero
+      buf.setUint16(76, 513); // payloadLen > 512
+      expect(
+        FluxonPacket.decode(buf.buffer.asUint8List(), hasSignature: false),
+        isNull,
+        reason: 'payloadLen > maxPayloadSize must be rejected',
+      );
+    });
+
+    test('payloadLen = 65535 returns null', () {
+      final buf = ByteData(FluxonPacket.headerSize);
+      buf.setUint8(0, FluxonPacket.version);
+      buf.setUint8(1, MessageType.chat.value);
+      buf.setUint8(2, 5);
+      buf.setUint8(3, 0);
+      buf.setInt64(4, DateTime.now().millisecondsSinceEpoch);
+      buf.setUint16(76, 65535);
+      expect(
+        FluxonPacket.decode(buf.buffer.asUint8List(), hasSignature: false),
+        isNull,
+      );
+    });
+
+    test('TTL > maxTTL returns null', () {
+      final buf = ByteData(FluxonPacket.headerSize + 5);
+      buf.setUint8(0, FluxonPacket.version);
+      buf.setUint8(1, MessageType.chat.value);
+      buf.setUint8(2, FluxonPacket.maxTTL + 1); // invalid TTL
+      buf.setUint8(3, 0);
+      buf.setInt64(4, DateTime.now().millisecondsSinceEpoch);
+      buf.setUint16(76, 5);
+      expect(
+        FluxonPacket.decode(buf.buffer.asUint8List(), hasSignature: false),
+        isNull,
+        reason: 'TTL > maxTTL must be rejected',
+      );
+    });
+
+    test('timestamp older than 6 minutes returns null (replay guard)', () {
+      final oldTs = DateTime.now()
+          .subtract(const Duration(minutes: 6))
+          .millisecondsSinceEpoch;
+      final buf = ByteData(FluxonPacket.headerSize + 5);
+      buf.setUint8(0, FluxonPacket.version);
+      buf.setUint8(1, MessageType.chat.value);
+      buf.setUint8(2, 5);
+      buf.setUint8(3, 0);
+      buf.setInt64(4, oldTs);
+      buf.setUint16(76, 5);
+      expect(
+        FluxonPacket.decode(buf.buffer.asUint8List(), hasSignature: false),
+        isNull,
+        reason: 'Packets older than ±5 minutes must be rejected',
+      );
+    });
+  });
+
+  group('encode — security guard', () {
+    test('encode throws ArgumentError when payload > maxPayloadSize', () {
+      final oversized = FluxonPacket(
+        type: MessageType.chat,
+        ttl: 5,
+        timestamp: DateTime.now().millisecondsSinceEpoch,
+        sourceId: Uint8List(32),
+        destId: Uint8List(32),
+        payload: Uint8List(FluxonPacket.maxPayloadSize + 1),
+      );
+      expect(() => oversized.encode(), throwsArgumentError);
+    });
+  });
+
+  group('packetId — signature discrimination (PROTO-H1)', () {
+    test('signed and unsigned packets with identical headers have different packetIds', () {
+      final ts = DateTime.now().millisecondsSinceEpoch;
+      final src = Uint8List(32)..fillRange(0, 32, 0xAA);
+      final dst = Uint8List(32);
+      final pay = Uint8List.fromList([1, 2, 3]);
+      final sig = Uint8List(64)..fillRange(0, 64, 0xBB);
+
+      final unsigned = FluxonPacket(
+        type: MessageType.chat,
+        ttl: 5,
+        flags: 42,
+        timestamp: ts,
+        sourceId: src,
+        destId: dst,
+        payload: pay,
+      );
+      final signed = FluxonPacket(
+        type: MessageType.chat,
+        ttl: 5,
+        flags: 42,
+        timestamp: ts,
+        sourceId: src,
+        destId: dst,
+        payload: pay,
+        signature: sig,
+      );
+
+      expect(unsigned.packetId, isNot(equals(signed.packetId)));
+    });
+
+    test('two unsigned packets with same header have the same packetId', () {
+      final ts = DateTime.now().millisecondsSinceEpoch;
+      final src = Uint8List(32)..fillRange(0, 32, 0xAA);
+      final p1 = FluxonPacket(
+        type: MessageType.chat,
+        ttl: 5,
+        flags: 7,
+        timestamp: ts,
+        sourceId: src,
+        destId: Uint8List(32),
+        payload: Uint8List(0),
+      );
+      final p2 = FluxonPacket(
+        type: MessageType.chat,
+        ttl: 5,
+        flags: 7,
+        timestamp: ts,
+        sourceId: src,
+        destId: Uint8List(32),
+        payload: Uint8List(0),
+      );
+      expect(p1.packetId, equals(p2.packetId));
+    });
+  });
+
   group('MessageType', () {
     test('fromValue returns correct type', () {
       expect(MessageType.fromValue(0x02), equals(MessageType.chat));

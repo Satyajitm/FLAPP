@@ -783,6 +783,18 @@ class BleTransport extends Transport {
       return;
     }
 
+    // Cross-module HIGH (complements PROTO-H1): Drop unsigned non-handshake
+    // packets from peers that have not yet completed a Noise session.
+    // Without this guard, a fresh cold-boot node accepts unsigned packets for
+    // all non-handshake types, providing a complete bypass of Ed25519 verification.
+    if (packet.signature == null && packet.type != MessageType.handshake) {
+      SecureLogger.warning(
+        'Unsigned non-handshake packet from unauthenticated peer $fromDeviceId — dropping',
+        category: 'BLE',
+      );
+      return;
+    }
+
     // Handle Noise handshake packets specially (before signature verification,
     // since we don't yet have the remote signing key at handshake time).
     if (packet.type == MessageType.handshake) {
