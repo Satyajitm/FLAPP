@@ -1,24 +1,57 @@
 import 'dart:convert';
+import 'dart:isolate';
 import 'dart:typed_data';
 import 'package:sodium_libs/sodium_libs.dart';
+import 'package:sodium_libs/sodium_libs_sumo.dart';
 import '../../shared/hex_utils.dart';
 import '../crypto/sodium_instance.dart';
+
+/// Top-level Argon2id derivation that can run inside [Isolate.run].
+///
+/// Initializes its own sodium instance so it can run in a background isolate
+/// without accessing the main isolate's [sodiumInstance] global.
+/// Returns `(key bytes, group ID hex string)`.
+Future<(Uint8List, String)> _deriveInIsolate(
+    (String passphrase, Uint8List salt) args) async {
+  final (passphrase, salt) = args;
+  // ignore: deprecated_member_use
+  final sodium = await SodiumSumoInit.init();
+  // ignore: deprecated_member_use
+  final key = sodium.crypto.pwhash(
+    outLen: 32,
+    password: passphrase.toCharArray(),
+    salt: salt,
+    // ignore: deprecated_member_use
+    opsLimit: sodium.crypto.pwhash.opsLimitModerate,
+    // ignore: deprecated_member_use
+    memLimit: sodium.crypto.pwhash.memLimitModerate,
+  );
+  final keyBytes = key.extractBytes();
+  key.dispose();
+
+  final idInput = Uint8List.fromList(
+    utf8.encode('fluxon-group-id:') + keyBytes,
+  );
+  final hash = sodium.crypto.genericHash(message: idInput, outLen: 16);
+  final groupId = hash.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+  return (keyBytes, groupId);
+}
 
 /// Handles symmetric encryption/decryption for group communication.
 ///
 /// Extracted from [GroupManager] to satisfy SRP: group lifecycle management
 /// is separate from cryptographic operations.
 /// Cached result of a single Argon2id derivation.
-class _DerivedGroup {
+class DerivedGroup {
   final Uint8List key;
   final String groupId;
-  _DerivedGroup(this.key, this.groupId);
+  DerivedGroup(this.key, this.groupId);
 }
 
 class GroupCipher {
   /// Cache of passphrase+salt → derived key+groupId to avoid running
   /// the expensive Argon2id twice on create/join.
-  final Map<String, _DerivedGroup> _derivationCache = {};
+  final Map<String, DerivedGroup> _derivationCache = {};
 
   /// Cached [SecureKey] for the active group key.
   ///
@@ -131,7 +164,7 @@ class GroupCipher {
 
   /// Run Argon2id once and cache both the group key and group ID for the given
   /// [passphrase]+[salt] pair. Subsequent calls with the same inputs are free.
-  _DerivedGroup _derive(String passphrase, Uint8List salt) {
+  DerivedGroup _derive(String passphrase, Uint8List salt) {
     final sodium = sodiumInstance;
 
     // Use a BLAKE2b hash of (passphrase || salt) as the cache key so the
@@ -167,7 +200,7 @@ class GroupCipher {
     final hash = sodium.crypto.genericHash(message: idInput, outLen: 16);
     final groupId = hash.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 
-    final result = _DerivedGroup(keyBytes, groupId);
+    final result = DerivedGroup(keyBytes, groupId);
     _derivationCache[cacheKey] = result;
     return result;
   }
@@ -185,6 +218,29 @@ class GroupCipher {
   /// different salts get different IDs.
   String generateGroupId(String passphrase, Uint8List salt) =>
       _derive(passphrase, salt).groupId;
+
+  /// Async variant of [_derive] that runs Argon2id in a background isolate.
+  ///
+  /// Returns cached result immediately if available (cache hit is synchronous).
+  /// On a cache miss, spawns a background isolate to avoid blocking the UI thread.
+  Future<DerivedGroup> deriveAsync(String passphrase, Uint8List salt) async {
+    final sodium = sodiumInstance;
+    final keyInput = Uint8List.fromList(utf8.encode(passphrase) + salt);
+    final keyHash = sodium.crypto.genericHash(message: keyInput, outLen: 16);
+    final cacheKey =
+        keyHash.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+
+    final cached = _derivationCache[cacheKey];
+    if (cached != null) return cached;
+
+    // Cache miss — run Argon2id in a background isolate to keep UI responsive.
+    final (keyBytes, groupId) =
+        await Isolate.run(() => _deriveInIsolate((passphrase, salt)));
+
+    final result = DerivedGroup(keyBytes, groupId);
+    _derivationCache[cacheKey] = result;
+    return result;
+  }
 
   /// HIGH-C2: Evict the derivation cache and zero all cached key material.
   ///
@@ -252,6 +308,15 @@ class GroupCipher {
         bytes.add((buffer >> bitsLeft) & 0xFF);
       }
     }
-    return Uint8List.fromList(bytes);
+    final result = Uint8List.fromList(bytes);
+    // MEDIUM: Validate decoded length matches the expected Argon2id salt size.
+    // libsodium defines crypto_pwhash_SALTBYTES = 16 (constant across versions).
+    // Using a constant avoids a sodiumInstance access at the decoding boundary.
+    const expectedSaltBytes = 16; // crypto_pwhash_SALTBYTES
+    if (result.length != expectedSaltBytes) {
+      throw FormatException(
+          'Invalid salt length: ${result.length} (expected $expectedSaltBytes)');
+    }
+    return result;
   }
 }

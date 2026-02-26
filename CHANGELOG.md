@@ -5,6 +5,59 @@ Each entry records **what** changed, **which files** were affected, and **why** 
 
 ---
 
+## [v5.0] — Identity & Groups Deep-Dive Audit (V2)
+**Date:** 2026-02-26
+**Branch:** `Major_Security_Fixes`
+**Status:** Complete — 805/805 tests passing · Zero compile errors
+
+### Summary
+Full resolution of all findings from `security_audit/DEEP_DIVE_V2_IDENTITY.md` — a focused audit of the identity and group subsystem (`identity_manager.dart`, `group_manager.dart`, `group_cipher.dart`, `group_storage.dart`, `peer_id.dart`, `user_profile_manager.dart`, `create_group_screen.dart`, `join_group_screen.dart`, `share_group_screen.dart`). One CRITICAL, two HIGHs, three MEDIUMs, two LOWs, and four cross-module boundary issues resolved.
+
+---
+
+### Security Fixes
+
+#### ID-C1 [CRITICAL] — Passphrase embedded in plaintext in QR code — `lib/features/group/share_group_screen.dart`, `lib/features/group/join_group_screen.dart`, `lib/features/group/create_group_screen.dart`
+`ShareGroupScreen` constructed the QR payload as `fluxon:<joinCode>:<passphrase>`, embedding the sole group secret in a machine-readable code displayed on screen indefinitely. A bystander with a phone camera at any angle could silently scan the code, derive the group key, and receive all location updates, chat messages, and emergency alerts for the entire session — fully defeating group confidentiality. Fixed: QR payload changed to `fluxon:<joinCode>` only (the join code encodes only the salt, which is not a secret by itself). The `passphrase` constructor parameter was removed from `ShareGroupScreen`. `create_group_screen.dart` no longer passes the passphrase to the share screen. `JoinGroupScreen._parseQrPayload` was updated to extract only the join code; any passphrase portion in legacy QR codes is silently ignored. Both screens' subtitle text updated to make clear that the passphrase must be shared verbally.
+
+#### ID-H1 [HIGH] — No passphrase upper-bound enforced at API layer — `lib/core/identity/group_manager.dart`, `lib/features/group/create_group_screen.dart`, `lib/features/group/join_group_screen.dart`
+The UI enforced a minimum passphrase length of 8 characters but no maximum. `GroupManager.createGroup()` and `joinGroup()` passed arbitrarily long strings into Argon2id. A deep-link or QR payload could supply a multi-megabyte passphrase (via the old `parts.sublist(1).join(':')` path), bypassing the `length < 8` UI check and extending Argon2id runtime by orders of magnitude, causing an ANR. Fixed: `GroupManager.maxPassphraseLength = 128` constant enforced at the API boundary before derivation in both `createGroup` and `joinGroup`. The same 128-char upper bound added to both UI screens. `_parseQrPayload` can no longer populate the passphrase field from QR data at all.
+
+#### ID-H2 [HIGH] — Argon2id derivation blocks the UI thread — `lib/core/identity/group_cipher.dart`, `lib/core/identity/group_manager.dart`
+`GroupManager.createGroup()` and `joinGroup()` called `GroupCipher._derive()` synchronously on the Flutter UI thread. At `opsLimitModerate` (300–500 ms on a mid-range Android device), this froze the UI entirely — the progress indicator could not animate because the widget build cycle was blocked. Fixed: a top-level `_deriveInIsolate((passphrase, salt))` function was added to `group_cipher.dart` that initialises its own `SodiumSumo` instance and performs the full Argon2id derivation. A new `GroupCipher.deriveAsync(passphrase, salt)` method checks the in-process cache first (O(1), synchronous), then on a miss spawns `Isolate.run(() => _deriveInIsolate(...))` to run the heavy work off the UI thread. `GroupManager.createGroup` and `joinGroup` are now `async` and call `_cipher.deriveAsync`. UI screens updated to `await` these calls and disable their buttons during the operation.
+
+#### ID-M1 [MEDIUM] — `unawaited` persistence in `createGroup`/`joinGroup` silently loses errors — `lib/core/identity/group_manager.dart`
+Both methods called `unawaited(_groupStorage.saveGroup(...))`. If `flutter_secure_storage` threw (keystore locked, quota exceeded), the exception was silently discarded. The in-memory `_activeGroup` was set, so the group appeared active, but after an app restart `initialize()` would return `_activeGroup == null`, losing group membership permanently — a critical failure in disaster-response scenarios where the creator may be unreachable. Fixed: both `saveGroup` calls are now `await`ed. Storage failures propagate to callers; the UI screens catch and surface them via error state.
+
+#### ID-M2 [MEDIUM] — Unbounded trusted-peer set in `IdentityManager` — `lib/core/identity/identity_manager.dart`
+`_trustedPeers` was a plain `Set<PeerId>` with no size cap. In a mesh network at a large event, encountering hundreds of peers triggered a full set re-serialisation on every `trustPeer` call. An adversary generating many ephemeral peer IDs could cause repeated keystore writes (write-amplification DoS). Eventually, when the JSON blob exceeded keystore limits, the `catch (_) {}` in `_persistTrustedPeers` silently dropped the write, leaving in-memory and persistent sets diverged. Fixed: `_trustedPeers` changed to `LinkedHashMap<PeerId, bool>` with `_maxTrustedPeers = 500` cap. `trustPeer` evicts the LRU entry (first key) when the cap is reached. Re-trusting an already-known peer promotes it to MRU position.
+
+#### ID-M3 [MEDIUM] — `decodeSalt` does not validate decoded length — `lib/core/identity/group_cipher.dart`
+`decodeSalt(String code)` decoded any base32 string of any length without checking that the result was exactly 16 bytes (`crypto_pwhash_SALTBYTES`). Any direct caller supplying a short join code would trigger an opaque `SodiumException` inside `pwhash` rather than a clear domain-level error. Fixed: after decoding, the result length is compared against the constant `16`. A `FormatException('Invalid salt length: ${result.length} (expected 16)')` is thrown on mismatch. Uses a constant rather than `sodiumInstance.crypto.pwhash.saltBytes` to keep the pure-Dart test suite working without sodium initialisation.
+
+#### ID-L1 [LOW] — Display name not sanitised for rendering-level injection — `lib/core/identity/user_profile_manager.dart`
+`setName` trimmed whitespace and enforced a 32-character maximum but did not filter C0 control characters (U+0000–U+001F), zero-width chars (U+200B–U+200F), or Unicode BiDi override characters (U+202A–U+202E, U+2066–U+2069). A local user could set their name to contain a right-to-left override, causing it to render in an unexpected direction and potentially overlap adjacent UI text. Fixed: `.replaceAll(RegExp(r'[\x00-\x1F\u200B-\u200F\u202A-\u202E\u2066-\u2069]'), '')` applied before trim.
+
+---
+
+### API Changes
+
+- `GroupManager.createGroup` and `joinGroup` are now `async` (`Future<FluxonGroup>`). All call sites updated to `await`.
+- `ShareGroupScreen` no longer accepts a `passphrase` constructor parameter.
+- `GroupCipher._DerivedGroup` renamed to `DerivedGroup` (public) to allow fake implementations in tests.
+- `GroupCipher.deriveAsync(passphrase, salt)` added as the primary entry point for derivation from `GroupManager`.
+
+---
+
+### Tests Updated
+
+- **`test/core/group_manager_test.dart`** — All `createGroup`/`joinGroup` calls made `async`. Persistence test simplified (no more `Future.delayed` — storage is now synchronously awaited). `FakeGroupCipher` received `deriveAsync` override.
+- **`test/features/share_group_screen_test.dart`** — All `ShareGroupScreen(...)` calls updated to remove `passphrase` param. `_buildHarness` signature cleaned up. QR format tests updated to verify `'fluxon:<joinCode>'` (no passphrase). Subtitle text assertion updated.
+- **`test/features/group_screens_test.dart`** — `FakeGroupCipher` received `deriveAsync`. `createGroup` call made async.
+- **`test/core/services/receipt_service_test.dart`**, **`test/features/chat_repository_test.dart`**, **`test/features/chat_screen_test.dart`**, **`test/features/emergency_repository_test.dart`**, **`test/features/receipt_integration_test.dart`** — All `_FakeGroupCipher` implementations received `deriveAsync` override. `createGroup` call sites made async where applicable.
+
+---
+
 ## [v4.9] — Mesh Layer Deep-Dive Audit (V4)
 **Date:** 2026-02-26
 **Branch:** `Major_Security_Fixes`

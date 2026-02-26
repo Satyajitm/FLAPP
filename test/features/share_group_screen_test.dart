@@ -69,6 +69,10 @@ class _FakeGroupCipher implements GroupCipher {
 
   @override
   void clearCache() {}
+
+  @override
+  Future<DerivedGroup> deriveAsync(String passphrase, Uint8List salt) async =>
+      DerivedGroup(deriveGroupKey(passphrase, salt), generateGroupId(passphrase, salt));
 }
 
 // ---------------------------------------------------------------------------
@@ -95,7 +99,6 @@ FluxonGroup _makeGroup({String name = 'Trekkers', String passphrase = 'pass1234'
 /// it are popped back to the root).
 Widget _buildHarness({
   required FluxonGroup group,
-  String passphrase = 'pass1234',
   void Function()? onRootReached,
 }) {
   return MaterialApp(
@@ -116,7 +119,6 @@ Widget _buildHarness({
                             MaterialPageRoute<void>(
                               builder: (_) => ShareGroupScreen(
                                 group: group,
-                                passphrase: passphrase,
                               ),
                             ),
                           );
@@ -161,12 +163,12 @@ void main() {
     testWidgets('renders heading and subtitle', (tester) async {
       final group = _makeGroup();
       await tester.pumpWidget(
-        MaterialApp(home: ShareGroupScreen(group: group, passphrase: 'pass1234')),
+        MaterialApp(home: ShareGroupScreen(group: group)),
       );
 
       expect(find.text('Share your group'), findsOneWidget);
       expect(
-        find.text('Let others scan the QR code or type the join code below.'),
+        find.text('Share the QR code or join code below. The passphrase must be shared verbally — it is not in the QR code.'),
         findsOneWidget,
       );
     });
@@ -176,7 +178,7 @@ void main() {
       final expectedCode = group.joinCode;
 
       await tester.pumpWidget(
-        MaterialApp(home: ShareGroupScreen(group: group, passphrase: 'pass1234')),
+        MaterialApp(home: ShareGroupScreen(group: group)),
       );
 
       expect(find.text(expectedCode), findsOneWidget);
@@ -199,7 +201,7 @@ void main() {
     testWidgets('displays group name', (tester) async {
       final group = _makeGroup(name: 'Trail Team');
       await tester.pumpWidget(
-        MaterialApp(home: ShareGroupScreen(group: group, passphrase: 'pass1234')),
+        MaterialApp(home: ShareGroupScreen(group: group)),
       );
 
       expect(find.text('Group: Trail Team'), findsOneWidget);
@@ -208,7 +210,7 @@ void main() {
     testWidgets('displays Join Code label', (tester) async {
       final group = _makeGroup();
       await tester.pumpWidget(
-        MaterialApp(home: ShareGroupScreen(group: group, passphrase: 'pass1234')),
+        MaterialApp(home: ShareGroupScreen(group: group)),
       );
 
       expect(find.text('Join Code'), findsOneWidget);
@@ -217,7 +219,7 @@ void main() {
     testWidgets('has a copy button', (tester) async {
       final group = _makeGroup();
       await tester.pumpWidget(
-        MaterialApp(home: ShareGroupScreen(group: group, passphrase: 'pass1234')),
+        MaterialApp(home: ShareGroupScreen(group: group)),
       );
 
       expect(find.byIcon(Icons.copy_outlined), findsOneWidget);
@@ -227,7 +229,7 @@ void main() {
         (tester) async {
       final group = _makeGroup();
       await tester.pumpWidget(
-        MaterialApp(home: ShareGroupScreen(group: group, passphrase: 'pass1234')),
+        MaterialApp(home: ShareGroupScreen(group: group)),
       );
 
       // The copy button may be below the QR image in the scrollable body.
@@ -243,7 +245,7 @@ void main() {
     testWidgets('has a Done button', (tester) async {
       final group = _makeGroup();
       await tester.pumpWidget(
-        MaterialApp(home: ShareGroupScreen(group: group, passphrase: 'pass1234')),
+        MaterialApp(home: ShareGroupScreen(group: group)),
       );
 
       expect(find.text('Done'), findsOneWidget);
@@ -293,29 +295,27 @@ void main() {
       expect(find.text('Start'), findsOneWidget);
     });
 
-    testWidgets('QR data encodes correct fluxon:<joinCode>:<passphrase> format',
+    testWidgets('QR data encodes correct fluxon:<joinCode> format',
         (tester) async {
       // Validate the _qrData getter produces the expected format by checking
-      // that ShareGroupScreen computes it correctly from the group and passphrase.
-      const passphrase = 'ultra-secret-42';
-      final group = _makeGroup(passphrase: passphrase);
-      final expectedQrData = 'fluxon:${group.joinCode}:$passphrase';
+      // that ShareGroupScreen computes it correctly from the group (no passphrase).
+      final group = _makeGroup(passphrase: 'ultra-secret-42');
+      final expectedQrData = 'fluxon:${group.joinCode}';
 
       // The QR data isn't directly readable via text finders, but we can
       // verify the formula is correct using the group and cipher directly.
       expect(expectedQrData, startsWith('fluxon:'));
-      expect(expectedQrData, contains(':$passphrase'));
+      expect(expectedQrData.split(':').length, equals(2));
       expect(expectedQrData.split(':')[1], equals(group.joinCode));
     });
 
-    testWidgets('different passphrases produce different QR data', (tester) async {
-      final group1 = _makeGroup(passphrase: 'alpha-pass');
-      final group2 = _makeGroup(passphrase: 'beta-pass');
+    testWidgets('QR data has correct fluxon:<joinCode> format', (tester) async {
+      final group = _makeGroup(passphrase: 'alpha-pass');
+      final qr = 'fluxon:${group.joinCode}';
 
-      final qr1 = 'fluxon:${group1.joinCode}:alpha-pass';
-      final qr2 = 'fluxon:${group2.joinCode}:beta-pass';
-
-      expect(qr1, isNot(equals(qr2)));
+      expect(qr, startsWith('fluxon:'));
+      expect(qr.split(':').length, equals(2));
+      expect(qr.split(':')[1], equals(group.joinCode));
     });
   });
 }

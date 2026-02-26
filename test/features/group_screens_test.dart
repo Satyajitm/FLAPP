@@ -89,6 +89,10 @@ class FakeGroupCipher implements GroupCipher {
 
   @override
   void clearCache() {}
+
+  @override
+  Future<DerivedGroup> deriveAsync(String passphrase, Uint8List salt) async =>
+      DerivedGroup(deriveGroupKey(passphrase, salt), generateGroupId(passphrase, salt));
 }
 
 class FakeSecureStorage implements FlutterSecureStorage {
@@ -433,7 +437,7 @@ void main() {
         cipher: fakeCipher,
         groupStorage: GroupStorage(storage: FakeSecureStorage()),
       );
-      creator.createGroup('shared-pass', groupName: 'Team');
+      await creator.createGroup('shared-pass', groupName: 'Team');
       final createdKey = Uint8List.fromList(creator.activeGroup!.key);
       final joinCode = creator.activeGroup!.joinCode;
 

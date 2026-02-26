@@ -38,7 +38,7 @@ class _JoinGroupScreenState extends ConsumerState<JoinGroupScreen> {
     return code.split('').every((c) => _validCodeChars.contains(c));
   }
 
-  void _joinGroup() {
+  Future<void> _joinGroup() async {
     final passphrase = _passphraseController.text.trim();
     final joinCode = _joinCodeController.text.trim().toUpperCase();
 
@@ -48,7 +48,12 @@ class _JoinGroupScreenState extends ConsumerState<JoinGroupScreen> {
       setState(() => _passphraseError = 'Enter the group passphrase');
       hasError = true;
     } else if (passphrase.length < 8) {
-      setState(() => _passphraseError = 'Passphrase must be at least 8 characters');
+      setState(() =>
+          _passphraseError = 'Passphrase must be at least 8 characters');
+      hasError = true;
+    } else if (passphrase.length > 128) {
+      setState(() =>
+          _passphraseError = 'Passphrase must be at most 128 characters');
       hasError = true;
     } else {
       setState(() => _passphraseError = null);
@@ -58,7 +63,8 @@ class _JoinGroupScreenState extends ConsumerState<JoinGroupScreen> {
       setState(() => _joinCodeError = 'Enter the 26-character join code');
       hasError = true;
     } else if (!_isValidCode(joinCode)) {
-      setState(() => _joinCodeError = 'Invalid code — must be 26 characters (A-Z, 2-7)');
+      setState(() =>
+          _joinCodeError = 'Invalid code — must be 26 characters (A-Z, 2-7)');
       hasError = true;
     } else {
       setState(() => _joinCodeError = null);
@@ -68,13 +74,15 @@ class _JoinGroupScreenState extends ConsumerState<JoinGroupScreen> {
 
     setState(() => _isJoining = true);
     try {
-      final group = ref.read(groupManagerProvider).joinGroup(
-        passphrase,
-        joinCode: joinCode,
-      );
+      final group = await ref.read(groupManagerProvider).joinGroup(
+            passphrase,
+            joinCode: joinCode,
+          );
+      if (!mounted) return;
       ref.read(activeGroupProvider.notifier).state = group;
       Navigator.of(context).pop();
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _isJoining = false;
         _joinCodeError = 'Invalid join code';
@@ -132,15 +140,20 @@ class _JoinGroupScreenState extends ConsumerState<JoinGroupScreen> {
   }
 
   void _parseQrPayload(String raw) {
-    // Expected format: fluxon:<joinCode>:<passphrase>
+    // Expected format: fluxon:<joinCode>
+    // Old format: fluxon:<joinCode>:<passphrase>  — passphrase portion is ignored.
+    // The passphrase is never embedded in QR codes; it must be shared verbally.
     if (!raw.startsWith('fluxon:')) return;
-    final parts = raw.substring('fluxon:'.length).split(':');
-    if (parts.length < 2) return;
-    final joinCode = parts[0];
-    final passphrase = parts.sublist(1).join(':'); // passphrase may contain colons
+    final rest = raw.substring('fluxon:'.length);
+    // Ignore anything after the first colon (legacy passphrase portion).
+    final colonIdx = rest.indexOf(':');
+    final joinCode = (colonIdx >= 0 ? rest.substring(0, colonIdx) : rest)
+        .trim()
+        .toUpperCase();
+    if (joinCode.isEmpty) return;
     setState(() {
       _joinCodeController.text = joinCode;
-      _passphraseController.text = passphrase;
+      // Passphrase must be typed by the user; never auto-populated from QR.
     });
   }
 
@@ -190,7 +203,8 @@ class _JoinGroupScreenState extends ConsumerState<JoinGroupScreen> {
             ),
             const SizedBox(height: 8),
             Text(
-              'Enter the passphrase and join code from the group creator.',
+              'Scan or type the join code, then enter the passphrase '
+              'you received verbally from the group creator.',
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize: 14,

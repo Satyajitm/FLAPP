@@ -5,22 +5,20 @@ import '../../core/identity/group_manager.dart';
 
 /// Displays the join code and QR code after a group is created.
 ///
-/// The QR payload is `fluxon:<joinCode>:<passphrase>`, allowing a joiner to
-/// scan once and have both fields automatically populated.
-///
-/// **Privacy note**: the QR code embeds the passphrase. Only share it
-/// point-to-point with trusted devices.
+/// The QR payload is `fluxon:<joinCode>` — the passphrase is NOT embedded.
+/// The passphrase must be shared verbally or through a separate secure channel.
+/// Joiners scan the QR code to get the join code, then type the passphrase
+/// themselves.
 class ShareGroupScreen extends StatelessWidget {
   final FluxonGroup group;
-  final String passphrase;
 
   const ShareGroupScreen({
     super.key,
     required this.group,
-    required this.passphrase,
   });
 
-  String get _qrData => 'fluxon:${group.joinCode}:$passphrase';
+  /// QR payload contains only the join code (salt), never the passphrase.
+  String get _qrData => 'fluxon:${group.joinCode}';
 
   @override
   Widget build(BuildContext context) {
@@ -69,7 +67,8 @@ class ShareGroupScreen extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              'Let others scan the QR code or type the join code below.',
+              'Share the QR code or join code below. '
+              'The passphrase must be shared verbally — it is not in the QR code.',
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize: 14,

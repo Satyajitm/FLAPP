@@ -1,3 +1,4 @@
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -18,10 +19,16 @@ class IdentityManager {
   Uint8List? _signingPublicKey;
   PeerId? _myPeerId;
 
-  /// M3: Set of trusted peer IDs (peers we've completed handshakes with).
-  /// Persisted to flutter_secure_storage so trust survives app restarts
-  /// (enables TOFU and peer blocklists across sessions).
-  final Set<PeerId> _trustedPeers = {};
+  /// LRU cap for [_trustedPeers] — consistent with NoiseSessionManager and
+  /// MeshService caps. Prevents write-amplification DoS via many ephemeral peers.
+  static const int _maxTrustedPeers = 500;
+
+  /// M3: LRU-ordered map of trusted peer IDs (peers we've completed handshakes with).
+  ///
+  /// Using [LinkedHashMap] preserves insertion order so the oldest entry can be
+  /// evicted when the cap is reached. Persisted to flutter_secure_storage so
+  /// trust survives app restarts (enables TOFU and peer blocklists).
+  final LinkedHashMap<PeerId, bool> _trustedPeers = LinkedHashMap();
 
   IdentityManager({KeyManager? keyManager})
       : _keyManager = keyManager ?? KeyManager();
@@ -71,8 +78,19 @@ class IdentityManager {
   }
 
   /// Mark a peer as trusted (after successful handshake).
+  ///
+  /// If [peerId] is already trusted it is promoted to MRU position.
+  /// If the cap of [_maxTrustedPeers] is reached, the least-recently-trusted
+  /// peer is evicted to keep the set bounded.
   Future<void> trustPeer(PeerId peerId) async {
-    _trustedPeers.add(peerId);
+    if (_trustedPeers.containsKey(peerId)) {
+      // Re-insert at end to promote to MRU position.
+      _trustedPeers.remove(peerId);
+    } else if (_trustedPeers.length >= _maxTrustedPeers) {
+      // Evict LRU (first inserted) entry.
+      _trustedPeers.remove(_trustedPeers.keys.first);
+    }
+    _trustedPeers[peerId] = true;
     await _persistTrustedPeers();
   }
 
@@ -83,10 +101,10 @@ class IdentityManager {
   }
 
   /// Check if a peer is trusted.
-  bool isTrusted(PeerId peerId) => _trustedPeers.contains(peerId);
+  bool isTrusted(PeerId peerId) => _trustedPeers.containsKey(peerId);
 
-  /// All currently trusted peers.
-  Set<PeerId> get trustedPeers => Set.unmodifiable(_trustedPeers);
+  /// All currently trusted peers (unmodifiable snapshot).
+  Set<PeerId> get trustedPeers => Set.unmodifiable(_trustedPeers.keys.toSet());
 
   /// Reset identity (deletes keys and trust).
   Future<void> resetIdentity() async {
@@ -122,7 +140,7 @@ class IdentityManager {
       for (final hex in hexList) {
         if (hex is String) {
           try {
-            _trustedPeers.add(PeerId.fromHex(hex));
+            _trustedPeers[PeerId.fromHex(hex)] = true;
           } catch (_) {
             // Skip malformed entries.
           }
@@ -136,7 +154,7 @@ class IdentityManager {
   /// Persist the trusted peer set to secure storage.
   Future<void> _persistTrustedPeers() async {
     try {
-      final hexList = _trustedPeers.map((p) => p.hex).toList();
+      final hexList = _trustedPeers.keys.map((p) => p.hex).toList();
       await _secureStorage.write(
         key: _trustedPeersKey,
         value: jsonEncode(hexList),

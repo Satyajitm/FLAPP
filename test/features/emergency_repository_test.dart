@@ -220,13 +220,13 @@ void main() {
     late MeshEmergencyRepository repository;
     final myPeerId = _makePeerId(0xCC);
 
-    setUp(() {
+    setUp(() async {
       transport = MockTransport();
       groupManager = GroupManager(
         cipher: _FakeGroupCipher(),
         groupStorage: GroupStorage(storage: _FakeSecureStorage()),
       );
-      groupManager.createGroup('sos-pass', groupName: 'SOS Team');
+      await groupManager.createGroup('sos-pass', groupName: 'SOS Team');
       repository = MeshEmergencyRepository(
         transport: transport,
         myPeerId: myPeerId,
@@ -431,6 +431,10 @@ class _FakeGroupCipher implements GroupCipher {
 
   @override
   void clearCache() {}
+
+  @override
+  Future<DerivedGroup> deriveAsync(String passphrase, Uint8List salt) async =>
+      DerivedGroup(deriveGroupKey(passphrase, salt), generateGroupId(passphrase, salt));
 }
 
 class _FakeSecureStorage implements FlutterSecureStorage {

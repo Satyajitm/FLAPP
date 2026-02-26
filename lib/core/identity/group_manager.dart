@@ -55,15 +55,31 @@ class GroupManager {
     );
   }
 
+  /// Maximum passphrase length enforced at the API layer.
+  ///
+  /// Prevents an oversized passphrase from causing an ANR during Argon2id
+  /// derivation, regardless of the call site (UI, QR scan, or direct API).
+  static const int maxPassphraseLength = 128;
+
   /// Create a new group with the given passphrase.
   ///
   /// Generates a fresh random salt and derives a group key + ID from it.
   /// Returns a [FluxonGroup] whose [FluxonGroup.joinCode] encodes the salt
   /// so joiners can derive the same key.
-  FluxonGroup createGroup(String passphrase, {String? groupName}) {
+  ///
+  /// Argon2id derivation runs in a background isolate to keep the UI
+  /// responsive. Storage is awaited so callers are notified of persistence
+  /// failures rather than silently losing group membership.
+  Future<FluxonGroup> createGroup(String passphrase,
+      {String? groupName}) async {
+    if (passphrase.length > maxPassphraseLength) {
+      throw ArgumentError(
+          'Passphrase exceeds maximum length of $maxPassphraseLength characters');
+    }
     final salt = _cipher.generateSalt();
-    final groupKey = _cipher.deriveGroupKey(passphrase, salt);
-    final groupId = _cipher.generateGroupId(passphrase, salt);
+    final derived = await _cipher.deriveAsync(passphrase, salt);
+    final groupKey = derived.key;
+    final groupId = derived.groupId;
     final name = groupName ?? 'Fluxon Group';
     final now = DateTime.now();
 
@@ -78,14 +94,13 @@ class GroupManager {
     );
 
     // Persist derived key, group ID, and salt — the passphrase is NOT stored.
-    unawaited(
-      _groupStorage.saveGroup(
-        groupKey: groupKey,
-        groupId: groupId,
-        name: name,
-        createdAt: now,
-        salt: salt,
-      ),
+    // Awaited so storage failures surface to the caller rather than being lost.
+    await _groupStorage.saveGroup(
+      groupKey: groupKey,
+      groupId: groupId,
+      name: name,
+      createdAt: now,
+      salt: salt,
     );
 
     return _activeGroup!;
@@ -96,14 +111,23 @@ class GroupManager {
   /// The [joinCode] encodes the creator's salt (as base32). Decoding it and
   /// running the same Argon2id derivation yields an identical key to the
   /// creator's, enabling decryption of group messages.
-  FluxonGroup joinGroup(
+  ///
+  /// Argon2id derivation runs in a background isolate to keep the UI
+  /// responsive. Storage is awaited so callers are notified of persistence
+  /// failures rather than silently losing group membership.
+  Future<FluxonGroup> joinGroup(
     String passphrase, {
     required String joinCode,
     String? groupName,
-  }) {
+  }) async {
+    if (passphrase.length > maxPassphraseLength) {
+      throw ArgumentError(
+          'Passphrase exceeds maximum length of $maxPassphraseLength characters');
+    }
     final salt = _cipher.decodeSalt(joinCode);
-    final groupKey = _cipher.deriveGroupKey(passphrase, salt);
-    final groupId = _cipher.generateGroupId(passphrase, salt);
+    final derived = await _cipher.deriveAsync(passphrase, salt);
+    final groupKey = derived.key;
+    final groupId = derived.groupId;
     final name = groupName ?? 'Fluxon Group';
     final now = DateTime.now();
 
@@ -117,14 +141,13 @@ class GroupManager {
       cipher: _cipher,
     );
 
-    unawaited(
-      _groupStorage.saveGroup(
-        groupKey: groupKey,
-        groupId: groupId,
-        name: name,
-        createdAt: now,
-        salt: salt,
-      ),
+    // Awaited so storage failures surface to the caller.
+    await _groupStorage.saveGroup(
+      groupKey: groupKey,
+      groupId: groupId,
+      name: name,
+      createdAt: now,
+      salt: salt,
     );
 
     return _activeGroup!;

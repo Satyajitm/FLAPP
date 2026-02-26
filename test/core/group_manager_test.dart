@@ -98,6 +98,10 @@ class FakeGroupCipher implements GroupCipher {
     }
     return Uint8List.fromList(result);
   }
+
+  @override
+  Future<DerivedGroup> deriveAsync(String passphrase, Uint8List salt) async =>
+      DerivedGroup(deriveGroupKey(passphrase, salt), generateGroupId(passphrase, salt));
 }
 
 // ---------------------------------------------------------------------------
@@ -178,9 +182,9 @@ void main() {
       expect(manager.isInGroup, isFalse);
     });
 
-    test('createGroup sets active group with derived key and ID', () {
+    test('createGroup sets active group with derived key and ID', () async {
       final salt = fakeCipher.generateSalt();
-      final group = manager.createGroup('secret', groupName: 'My Team');
+      final group = await manager.createGroup('secret', groupName: 'My Team');
 
       expect(manager.isInGroup, isTrue);
       expect(manager.activeGroup, isNotNull);
@@ -190,19 +194,19 @@ void main() {
       expect(group.members, isEmpty);
     });
 
-    test('createGroup uses default name when groupName is null', () {
-      final group = manager.createGroup('pass');
+    test('createGroup uses default name when groupName is null', () async {
+      final group = await manager.createGroup('pass');
       expect(group.name, equals('Fluxon Group'));
     });
 
-    test('FluxonGroup.joinCode is a 26-character string', () {
-      final group = manager.createGroup('pass');
+    test('FluxonGroup.joinCode is a 26-character string', () async {
+      final group = await manager.createGroup('pass');
       expect(group.joinCode.length, equals(26));
     });
 
-    test('joinGroup with same passphrase+joinCode derives same key as creator', () {
+    test('joinGroup with same passphrase+joinCode derives same key as creator', () async {
       // Creator creates group
-      final created = manager.createGroup('shared-secret', groupName: 'G1');
+      final created = await manager.createGroup('shared-secret', groupName: 'G1');
       final createdKey = Uint8List.fromList(created.key);
       final joinCode = created.joinCode;
 
@@ -211,21 +215,21 @@ void main() {
         cipher: fakeCipher,
         groupStorage: GroupStorage(storage: FakeSecureStorage()),
       );
-      final joined = joiner.joinGroup('shared-secret', joinCode: joinCode);
+      final joined = await joiner.joinGroup('shared-secret', joinCode: joinCode);
 
       expect(joined.key, equals(createdKey));
       expect(joined.id, equals(created.id));
     });
 
-    test('joinGroup produces different group from different joinCode', () {
-      final created1 = manager.createGroup('same-pass', groupName: 'G1');
+    test('joinGroup produces different group from different joinCode', () async {
+      final created1 = await manager.createGroup('same-pass', groupName: 'G1');
 
       // Different manager creates a different group with same passphrase
       final manager2 = GroupManager(
         cipher: fakeCipher,
         groupStorage: GroupStorage(storage: FakeSecureStorage()),
       );
-      final created2 = manager2.createGroup('same-pass', groupName: 'G2');
+      final created2 = await manager2.createGroup('same-pass', groupName: 'G2');
 
       // Since FakeGroupCipher.generateSalt() returns all-zeros, IDs will match
       // in the fake, but in production the random salt would differ.
@@ -234,13 +238,13 @@ void main() {
         cipher: fakeCipher,
         groupStorage: GroupStorage(storage: FakeSecureStorage()),
       );
-      final joined = joiner.joinGroup('same-pass', joinCode: created1.joinCode);
+      final joined = await joiner.joinGroup('same-pass', joinCode: created1.joinCode);
       expect(joined.id, equals(created1.id));
       expect(joined.id, equals(created2.id)); // same because fake salt is always zeros
     });
 
-    test('leaveGroup clears active group', () {
-      manager.createGroup('pass');
+    test('leaveGroup clears active group', () async {
+      await manager.createGroup('pass');
       expect(manager.isInGroup, isTrue);
 
       manager.leaveGroup();
@@ -248,8 +252,8 @@ void main() {
       expect(manager.activeGroup, isNull);
     });
 
-    test('addMember adds peer to active group members', () {
-      manager.createGroup('pass');
+    test('addMember adds peer to active group members', () async {
+      await manager.createGroup('pass');
       final peer = PeerId(Uint8List(32)..fillRange(0, 32, 0xAA));
 
       manager.addMember(peer);
@@ -263,8 +267,8 @@ void main() {
       expect(manager.activeGroup, isNull);
     });
 
-    test('removeMember removes peer from active group members', () {
-      manager.createGroup('pass');
+    test('removeMember removes peer from active group members', () async {
+      await manager.createGroup('pass');
       final peer = PeerId(Uint8List(32)..fillRange(0, 32, 0xCC));
 
       manager.addMember(peer);
@@ -279,8 +283,8 @@ void main() {
       manager.removeMember(peer);
     });
 
-    test('encryptForGroup returns encrypted data when in a group', () {
-      manager.createGroup('pass');
+    test('encryptForGroup returns encrypted data when in a group', () async {
+      await manager.createGroup('pass');
       final plaintext = Uint8List.fromList([1, 2, 3, 4, 5]);
 
       final encrypted = manager.encryptForGroup(plaintext);
@@ -301,8 +305,8 @@ void main() {
       expect(decrypted, isNull);
     });
 
-    test('encrypt/decrypt round-trip produces original data', () {
-      manager.createGroup('pass');
+    test('encrypt/decrypt round-trip produces original data', () async {
+      await manager.createGroup('pass');
       final plaintext = Uint8List.fromList([10, 20, 30, 40, 50]);
 
       final encrypted = manager.encryptForGroup(plaintext);
@@ -312,11 +316,8 @@ void main() {
       expect(decrypted, equals(plaintext));
     });
 
-    test('createGroup persists to storage including salt (fire-and-forget)', () async {
-      manager.createGroup('persist-me', groupName: 'Saved Group');
-
-      // Give fire-and-forget a moment to complete
-      await Future.delayed(const Duration(milliseconds: 50));
+    test('createGroup persists to storage including salt', () async {
+      await manager.createGroup('persist-me', groupName: 'Saved Group');
 
       final loaded = await groupStorage.loadGroup();
       expect(loaded, isNotNull);
@@ -326,11 +327,9 @@ void main() {
     });
 
     test('leaveGroup deletes from storage', () async {
-      manager.createGroup('temp', groupName: 'Temp');
-      await Future.delayed(const Duration(milliseconds: 50));
+      await manager.createGroup('temp', groupName: 'Temp');
 
       manager.leaveGroup();
-      await Future.delayed(const Duration(milliseconds: 50));
 
       final loaded = await groupStorage.loadGroup();
       expect(loaded, isNull);
@@ -369,11 +368,11 @@ void main() {
       expect(manager.isInGroup, isFalse);
     });
 
-    test('createGroup replaces previous active group', () {
-      manager.createGroup('first', groupName: 'First');
+    test('createGroup replaces previous active group', () async {
+      await manager.createGroup('first', groupName: 'First');
       final firstId = manager.activeGroup!.id;
 
-      manager.createGroup('second', groupName: 'Second');
+      await manager.createGroup('second', groupName: 'Second');
 
       expect(manager.activeGroup!.name, equals('Second'));
       expect(manager.activeGroup!.id, isNot(equals(firstId)));
@@ -390,13 +389,13 @@ void main() {
       expect(peer1, isNot(equals(peer3)));
     });
 
-    test('duplicate addMember does not create duplicates in Set', () {
+    test('duplicate addMember does not create duplicates in Set', () async {
       final cipher = FakeGroupCipher();
       final manager = GroupManager(
         cipher: cipher,
         groupStorage: GroupStorage(storage: FakeSecureStorage()),
       );
-      manager.createGroup('pass');
+      await manager.createGroup('pass');
 
       final peer = PeerId(Uint8List(32)..fillRange(0, 32, 0xAA));
       manager.addMember(peer);
@@ -422,13 +421,13 @@ void main() {
       );
     });
 
-    test('joinGroup with custom groupName uses provided name', () {
-      final created = manager.createGroup('my-pass', groupName: 'OrigGroup');
+    test('joinGroup with custom groupName uses provided name', () async {
+      final created = await manager.createGroup('my-pass', groupName: 'OrigGroup');
       final joiner = GroupManager(
         cipher: cipher,
         groupStorage: GroupStorage(storage: FakeSecureStorage()),
       );
-      final joined = joiner.joinGroup(
+      final joined = await joiner.joinGroup(
         'my-pass',
         joinCode: created.joinCode,
         groupName: 'CustomName',
@@ -436,34 +435,34 @@ void main() {
       expect(joined.name, equals('CustomName'));
     });
 
-    test('joinGroup with null groupName defaults to "Fluxon Group"', () {
-      final created = manager.createGroup('my-pass');
+    test('joinGroup with null groupName defaults to "Fluxon Group"', () async {
+      final created = await manager.createGroup('my-pass');
       final joiner = GroupManager(
         cipher: cipher,
         groupStorage: GroupStorage(storage: FakeSecureStorage()),
       );
-      final joined = joiner.joinGroup('my-pass', joinCode: created.joinCode);
+      final joined = await joiner.joinGroup('my-pass', joinCode: created.joinCode);
       expect(joined.name, equals('Fluxon Group'));
     });
 
-    test('joinGroup sets isInGroup true on joiner', () {
-      final created = manager.createGroup('pass1234');
+    test('joinGroup sets isInGroup true on joiner', () async {
+      final created = await manager.createGroup('pass1234');
       final joiner = GroupManager(
         cipher: cipher,
         groupStorage: GroupStorage(storage: FakeSecureStorage()),
       );
       expect(joiner.isInGroup, isFalse);
-      joiner.joinGroup('pass1234', joinCode: created.joinCode);
+      await joiner.joinGroup('pass1234', joinCode: created.joinCode);
       expect(joiner.isInGroup, isTrue);
     });
 
-    test('joinGroup returns the active group object', () {
-      final created = manager.createGroup('pass1234');
+    test('joinGroup returns the active group object', () async {
+      final created = await manager.createGroup('pass1234');
       final joiner = GroupManager(
         cipher: cipher,
         groupStorage: GroupStorage(storage: FakeSecureStorage()),
       );
-      final returned = joiner.joinGroup('pass1234', joinCode: created.joinCode);
+      final returned = await joiner.joinGroup('pass1234', joinCode: created.joinCode);
       expect(returned, same(joiner.activeGroup));
     });
   });
@@ -480,42 +479,42 @@ void main() {
       );
     });
 
-    test('members set is initially empty after createGroup', () {
-      final group = manager.createGroup('pass');
+    test('members set is initially empty after createGroup', () async {
+      final group = await manager.createGroup('pass');
       expect(group.members, isEmpty);
     });
 
-    test('createdAt is set to approximately now during createGroup', () {
+    test('createdAt is set to approximately now during createGroup', () async {
       final before = DateTime.now().subtract(const Duration(seconds: 1));
-      final group = manager.createGroup('pass');
+      final group = await manager.createGroup('pass');
       final after = DateTime.now().add(const Duration(seconds: 1));
       expect(group.createdAt.isAfter(before), isTrue);
       expect(group.createdAt.isBefore(after), isTrue);
     });
 
-    test('joinCode roundtrips through decodeSalt back to same salt', () {
-      final group = manager.createGroup('roundtrip-test');
+    test('joinCode roundtrips through decodeSalt back to same salt', () async {
+      final group = await manager.createGroup('roundtrip-test');
       final encoded = group.joinCode;
       final decoded = cipher.decodeSalt(encoded);
       expect(decoded, equals(group.salt));
     });
 
-    test('joinCode contains only valid base32 chars (A-Z, 2-7)', () {
+    test('joinCode contains only valid base32 chars (A-Z, 2-7)', () async {
       const valid = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-      final group = manager.createGroup('pass');
+      final group = await manager.createGroup('pass');
       for (final c in group.joinCode.split('')) {
         expect(valid.contains(c), isTrue,
             reason: 'Unexpected character "$c" in joinCode');
       }
     });
 
-    test('two managers with different passphrases produce different group IDs', () {
-      final g1 = manager.createGroup('alpha-pass');
+    test('two managers with different passphrases produce different group IDs', () async {
+      final g1 = await manager.createGroup('alpha-pass');
       final manager2 = GroupManager(
         cipher: FakeGroupCipher(),
         groupStorage: GroupStorage(storage: FakeSecureStorage()),
       );
-      final g2 = manager2.createGroup('beta-pass');
+      final g2 = await manager2.createGroup('beta-pass');
       expect(g1.id, isNot(equals(g2.id)));
     });
   });

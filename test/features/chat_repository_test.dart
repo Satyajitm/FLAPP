@@ -311,13 +311,13 @@ void main() {
     final myPeerId = _makePeerId(0xAA);
     final remotePeerId = _makePeerId(0xBB);
 
-    setUp(() {
+    setUp(() async {
       transport = MockTransport();
       groupManager = GroupManager(
         cipher: _FakeGroupCipher(),
         groupStorage: GroupStorage(storage: _FakeSecureStorage()),
       );
-      groupManager.createGroup('test-pass', groupName: 'Test');
+      await groupManager.createGroup('test-pass', groupName: 'Test');
       repository = MeshChatRepository(
         transport: transport,
         myPeerId: myPeerId,
@@ -365,7 +365,7 @@ void main() {
         cipher: _FakeGroupCipher(),
         groupStorage: GroupStorage(storage: _FakeSecureStorage()),
       );
-      otherManager.createGroup('different-pass');
+      await otherManager.createGroup('different-pass');
 
       final plainPayload = BinaryProtocol.encodeChatPayload('wrong group');
       final encrypted = otherManager.encryptForGroup(plainPayload)!;
@@ -680,6 +680,10 @@ class _FakeGroupCipher implements GroupCipher {
 
   @override
   void clearCache() {}
+
+  @override
+  Future<DerivedGroup> deriveAsync(String passphrase, Uint8List salt) async =>
+      DerivedGroup(deriveGroupKey(passphrase, salt), generateGroupId(passphrase, salt));
 }
 
 class _FakeSecureStorage implements FlutterSecureStorage {

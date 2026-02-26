@@ -21,10 +21,14 @@ class UserProfileManager {
     _displayName = await _storage.read(key: _nameKey) ?? '';
   }
 
-  /// Save a new display name. Trims whitespace.
+  /// Save a new display name. Trims whitespace and removes control/RTL characters.
   /// Passing an empty string clears the stored name.
   Future<void> setName(String name) async {
-    final trimmed = name.trim();
+    // Strip C0 control chars, zero-width chars, and Unicode bidirectional
+    // override characters that could alter rendering in the UI (LOW finding).
+    final sanitized = name.replaceAll(
+        RegExp(r'[\x00-\x1F\u200B-\u200F\u202A-\u202E\u2066-\u2069]'), '');
+    final trimmed = sanitized.trim();
     // Enforce max display name length of 32 characters.
     _displayName = trimmed.length > 32 ? trimmed.substring(0, 32) : trimmed;
     if (_displayName.isEmpty) {

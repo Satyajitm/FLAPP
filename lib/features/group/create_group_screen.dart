@@ -15,6 +15,7 @@ class _CreateGroupScreenState extends ConsumerState<CreateGroupScreen> {
   final _nameController = TextEditingController();
   final _passphraseController = TextEditingController();
   bool _obscurePassphrase = true;
+  bool _isCreating = false;
 
   @override
   void dispose() {
@@ -25,7 +26,7 @@ class _CreateGroupScreenState extends ConsumerState<CreateGroupScreen> {
 
   String? _passphraseError;
 
-  void _createGroup() {
+  Future<void> _createGroup() async {
     final name = _nameController.text.trim();
     final passphrase = _passphraseController.text.trim();
     if (passphrase.isEmpty) return;
@@ -34,20 +35,37 @@ class _CreateGroupScreenState extends ConsumerState<CreateGroupScreen> {
       setState(() => _passphraseError = 'Passphrase must be at least 8 characters');
       return;
     }
-    setState(() => _passphraseError = null);
+    if (passphrase.length > 128) {
+      setState(() => _passphraseError = 'Passphrase must be at most 128 characters');
+      return;
+    }
+    setState(() {
+      _passphraseError = null;
+      _isCreating = true;
+    });
 
-    final group = ref.read(groupManagerProvider).createGroup(
-      passphrase,
-      groupName: name.isEmpty ? null : name,
-    );
-    ref.read(activeGroupProvider.notifier).state = group;
+    try {
+      final group = await ref.read(groupManagerProvider).createGroup(
+        passphrase,
+        groupName: name.isEmpty ? null : name,
+      );
+      if (!mounted) return;
+      ref.read(activeGroupProvider.notifier).state = group;
 
-    // Navigate to the share screen so the creator can share the join code.
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => ShareGroupScreen(group: group, passphrase: passphrase),
-      ),
-    );
+      // Navigate to the share screen so the creator can share the join code.
+      // The passphrase is intentionally NOT passed — it must be shared verbally.
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ShareGroupScreen(group: group),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isCreating = false;
+        _passphraseError = 'Failed to create group. Please try again.';
+      });
+    }
   }
 
   @override
@@ -144,17 +162,27 @@ class _CreateGroupScreenState extends ConsumerState<CreateGroupScreen> {
             ),
             const SizedBox(height: 32),
             FilledButton(
-              onPressed: _createGroup,
+              onPressed: _isCreating ? null : _createGroup,
               style: FilledButton.styleFrom(
                 minimumSize: const Size.fromHeight(52),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
               ),
-              child: const Text(
-                'Create Group',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-              ),
+              child: _isCreating
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Text(
+                      'Create Group',
+                      style:
+                          TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                    ),
             ),
           ],
         ),

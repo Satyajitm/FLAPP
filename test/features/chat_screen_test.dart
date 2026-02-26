@@ -42,6 +42,8 @@ class _FakeGroupCipher implements GroupCipher {
   @override String encodeSalt(Uint8List s) => 'A' * 26;
   @override Uint8List decodeSalt(String c) => Uint8List(16);
   @override void clearCache() {}
+  @override Future<DerivedGroup> deriveAsync(String passphrase, Uint8List salt) async =>
+      DerivedGroup(deriveGroupKey(passphrase, salt), generateGroupId(passphrase, salt));
 }
 
 class _StubChatController extends StateNotifier<ChatState> implements ChatController {
@@ -65,14 +67,14 @@ UserProfileManager _makeProfileManager() =>
 // Helper to build the app with optional active group
 // ---------------------------------------------------------------------------
 
-Widget _buildApp({
+Future<Widget> _buildApp({
   required ChatState chatState,
   String displayName = 'Tester',
   bool withGroup = false,
-}) {
+}) async {
   final groupManager = _makeGroupManager();
   if (withGroup) {
-    groupManager.createGroup('mypassword', groupName: 'Test Group');
+    await groupManager.createGroup('mypassword', groupName: 'Test Group');
   }
   final group = withGroup ? groupManager.activeGroup : null;
 
@@ -95,13 +97,13 @@ Widget _buildApp({
 void main() {
   group('ChatScreen', () {
     testWidgets('shows No Group in appBar when no active group', (tester) async {
-      await tester.pumpWidget(_buildApp(chatState: const ChatState()));
+      await tester.pumpWidget(await _buildApp(chatState: const ChatState()));
       await tester.pumpAndSettle();
       expect(find.text('No Group'), findsOneWidget);
     });
 
     testWidgets('renders no-group CTA when no active group', (tester) async {
-      await tester.pumpWidget(_buildApp(chatState: const ChatState()));
+      await tester.pumpWidget(await _buildApp(chatState: const ChatState()));
       await tester.pumpAndSettle();
       expect(find.text('Join your group'), findsOneWidget);
       expect(find.text('Create Group'), findsWidgets);
@@ -109,27 +111,27 @@ void main() {
     });
 
     testWidgets('more_vert menu button is always present', (tester) async {
-      await tester.pumpWidget(_buildApp(chatState: const ChatState()));
+      await tester.pumpWidget(await _buildApp(chatState: const ChatState()));
       await tester.pumpAndSettle();
       expect(find.byIcon(Icons.more_vert), findsOneWidget);
     });
 
     testWidgets('shows empty-messages state when group active but no messages', (tester) async {
-      await tester.pumpWidget(_buildApp(chatState: const ChatState(), withGroup: true));
+      await tester.pumpWidget(await _buildApp(chatState: const ChatState(), withGroup: true));
       await tester.pumpAndSettle();
       expect(find.text('No messages yet'), findsOneWidget);
       expect(find.text('Say hello to your group!'), findsOneWidget);
     });
 
     testWidgets('shows message text field and send button when group active', (tester) async {
-      await tester.pumpWidget(_buildApp(chatState: const ChatState(), withGroup: true));
+      await tester.pumpWidget(await _buildApp(chatState: const ChatState(), withGroup: true));
       await tester.pumpAndSettle();
       expect(find.byType(TextField), findsOneWidget);
       expect(find.byIcon(Icons.send_rounded), findsOneWidget);
     });
 
     testWidgets('input bar hint text is visible', (tester) async {
-      await tester.pumpWidget(_buildApp(chatState: const ChatState(), withGroup: true));
+      await tester.pumpWidget(await _buildApp(chatState: const ChatState(), withGroup: true));
       await tester.pumpAndSettle();
       expect(find.text('Message group...'), findsOneWidget);
     });
@@ -141,7 +143,7 @@ void main() {
         ChatMessage(id: 'm1', sender: myPeer, text: 'Hello mesh!', timestamp: DateTime.now(), isLocal: true),
         ChatMessage(id: 'm2', sender: remotePeer, senderName: 'Bob', text: 'Hi there!', timestamp: DateTime.now(), isLocal: false),
       ];
-      await tester.pumpWidget(_buildApp(chatState: ChatState(messages: messages), withGroup: true));
+      await tester.pumpWidget(await _buildApp(chatState: ChatState(messages: messages), withGroup: true));
       await tester.pumpAndSettle();
       expect(find.text('Hello mesh!'), findsOneWidget);
       expect(find.text('Hi there!'), findsOneWidget);
@@ -149,14 +151,14 @@ void main() {
     });
 
     testWidgets('shows CircularProgressIndicator when isSending', (tester) async {
-      await tester.pumpWidget(_buildApp(chatState: const ChatState(isSending: true), withGroup: true));
+      await tester.pumpWidget(await _buildApp(chatState: const ChatState(isSending: true), withGroup: true));
       await tester.pump();
       expect(find.byType(CircularProgressIndicator), findsOneWidget);
       expect(find.byIcon(Icons.send_rounded), findsNothing);
     });
 
     testWidgets('group name appears in appBar when group is active', (tester) async {
-      await tester.pumpWidget(_buildApp(chatState: const ChatState(), withGroup: true));
+      await tester.pumpWidget(await _buildApp(chatState: const ChatState(), withGroup: true));
       await tester.pumpAndSettle();
       expect(find.text('Test Group'), findsOneWidget);
     });
@@ -166,7 +168,7 @@ void main() {
       final messages = [
         ChatMessage(id: 'x', sender: remotePeer, senderName: 'Alice', text: 'Hey!', timestamp: DateTime.now(), isLocal: false),
       ];
-      await tester.pumpWidget(_buildApp(chatState: ChatState(messages: messages), withGroup: true));
+      await tester.pumpWidget(await _buildApp(chatState: ChatState(messages: messages), withGroup: true));
       await tester.pumpAndSettle();
       expect(find.text('Alice'), findsOneWidget);
     });

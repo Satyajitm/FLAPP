@@ -124,6 +124,10 @@ class _FakeGroupCipher implements GroupCipher {
 
   @override
   void clearCache() {}
+
+  @override
+  Future<DerivedGroup> deriveAsync(String passphrase, Uint8List salt) async =>
+      DerivedGroup(deriveGroupKey(passphrase, salt), generateGroupId(passphrase, salt));
 }
 
 class _FakeSecureStorage implements FlutterSecureStorage {
@@ -297,7 +301,7 @@ void main() {
     });
 
     test('group-encrypted receipt is sent when in group', () async {
-      groupManager.createGroup('test-pass', groupName: 'Test');
+      await groupManager.createGroup('test-pass', groupName: 'Test');
 
       await service.sendDeliveryReceipt(
         originalTimestamp: 5000,
@@ -312,7 +316,7 @@ void main() {
     });
 
     test('group-encrypted incoming receipt is decrypted', () async {
-      groupManager.createGroup('test-pass', groupName: 'Test');
+      await groupManager.createGroup('test-pass', groupName: 'Test');
 
       // Build encrypted receipt payload
       final plainPayload = BinaryProtocol.encodeReceiptPayload(

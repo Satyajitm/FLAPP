@@ -127,6 +127,10 @@ class _FakeGroupCipher implements GroupCipher {
 
   @override
   void clearCache() {}
+
+  @override
+  Future<DerivedGroup> deriveAsync(String passphrase, Uint8List salt) async =>
+      DerivedGroup(deriveGroupKey(passphrase, salt), generateGroupId(passphrase, salt));
 }
 
 class _FakeSecureStorage implements FlutterSecureStorage {
@@ -435,13 +439,13 @@ void main() {
     final myPeerId = _makePeerId(0xAA);
     final remotePeerId = _makePeerId(0xBB);
 
-    setUp(() {
+    setUp(() async {
       transport = _MockTransport();
       groupManager = GroupManager(
         cipher: _FakeGroupCipher(),
         groupStorage: GroupStorage(storage: _FakeSecureStorage()),
       );
-      groupManager.createGroup('shared-pass', groupName: 'TestGroup');
+      await groupManager.createGroup('shared-pass', groupName: 'TestGroup');
       receiptService = ReceiptService(
         transport: transport,
         myPeerId: myPeerId,
