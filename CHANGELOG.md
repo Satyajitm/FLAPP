@@ -5,6 +5,52 @@ Each entry records **what** changed, **which files** were affected, and **why** 
 
 ---
 
+## [v4.9] — Mesh Layer Deep-Dive Audit (V4)
+**Date:** 2026-02-26
+**Branch:** `Major_Security_Fixes`
+**Status:** Complete — 805/805 tests passing · Zero compile errors
+
+### Summary
+Full resolution of all findings from `security_audit/DEEP_DIVE_V4_MESH.md` — a focused audit of the mesh networking layer (`mesh_service.dart`, `gossip_sync.dart`, `topology_tracker.dart`, `deduplicator.dart`, `relay_controller.dart`). One HIGH, three MEDIUMs, four LOWs, and two INFOs resolved, plus two cross-module boundary issues addressed.
+
+---
+
+### Security Fixes
+
+#### MESH-H1 [HIGH] — Relay continues after `stop()` due to fire-and-forget async — `lib/core/mesh/mesh_service.dart`
+`_maybeRelay` is `async` and suspends at `await Future.delayed(...)`. Calling `stop()` cancelled subscriptions and timers but did not interrupt in-flight relay coroutines. A burst of packets with high-jitter relay decisions sent just before `stop()` would relay one extra packet per in-flight chain, and any relay executing after `dispose()` closed `_appPacketController` could throw `StateError: Cannot add event after closing`. Fixed: added `bool _running` flag set to `true` in `start()` and `false` at the very top of `stop()`. Two guards in `_maybeRelay` — before the jitter `await` and after it — ensure all in-flight relays abort cleanly on stop.
+
+#### MESH-M1 [MEDIUM] — `_syncRateByPeer` grows unbounded under peer-ID spoofing — `lib/core/mesh/gossip_sync.dart`
+`handleSyncRequest` indexed `_syncRateByPeer` by hex peer ID with no eviction between 60-second maintenance cycles. An attacker sending gossip sync requests with a fresh random `fromPeerId` on each request caused unbounded `_SyncRateState` allocations, accumulating thousands of entries before the next cleanup. Fixed: `_syncRateByPeer` changed to `LinkedHashMap` capped at 200 entries; the oldest entry is evicted before inserting a new peer key when the map is at capacity.
+
+#### MESH-M2 [MEDIUM] — Handshake packets bypass all signature verification and relay uncapped — `lib/core/mesh/mesh_service.dart`
+`bool verified = packet.type == MessageType.handshake` unconditionally set `verified = true` for all handshake packets regardless of their signature. Crafted handshake payloads from any source ID were emitted to the app stream with full relay priority and TTL=6, enabling injection of fake Noise XX messages targeting any peer to force session teardown or key confusion. The BleTransport-level handshake rate limit (5/peer/60s) did not cover multi-hop relayed handshakes. Fixed: (1) per-source rate limit at the MeshService level — `_HandshakeRateState` map (LRU-capped at 200 entries, max 3 handshakes per source per 60 s); (2) effective relay TTL for handshake packets capped at 3 (vs 6 for normal broadcast) to bound propagation distance.
+
+#### MESH-M3 [MEDIUM] — `peerHasIds` in `handleSyncRequest` fully attacker-controlled — `lib/core/mesh/gossip_sync.dart`
+`handleSyncRequest` accepted an unbounded `Set<String> peerHasIds` from the network without any size check. A malicious peer crafting a gossip sync request with 100,000 IDs caused O(n) heap allocation before the rate-limit check. Fixed: early return `if (peerHasIds.length > config.seenCapacity * 2)` added at the top of `handleSyncRequest`.
+
+#### Cross-module [MEDIUM] — Gossip sync records unverified packets, enabling relay bypass — `lib/core/mesh/mesh_service.dart`
+`_gossipSync.onPacketSeen(packet)` was called at line 229, immediately after the dedup check but before the direct-peer authentication and drop decisions. Packets from unverified direct peers that were subsequently dropped at the app layer were still recorded in gossip sync's `_seenPackets` and could be re-sent to distant nodes in response to sync requests — a bypass where a malicious direct peer whose packets are dropped locally can still propagate its packets mesh-wide via gossip. Fixed: `_gossipSync.onPacketSeen()` moved to after all drop decisions for app-layer packets. Topology packets now only call `onPacketSeen` when `verified == true`.
+
+---
+
+### Resource Management Fixes
+
+#### MESH-L1 [LOW] — `updateNeighbors` stores unbounded neighbor sets per node — `lib/core/mesh/topology_tracker.dart`
+The 10-neighbor cap was enforced only in `BinaryProtocol.decodeDiscoveryPayload`, not in `TopologyTracker.updateNeighbors` itself. Any future call path bypassing `BinaryProtocol` (e.g., `_onPeersChanged`) could store an arbitrarily large neighbor set. With 1000 nodes each claiming 1000 neighbors, `_claims` would hold 1,000,000 string entries. Fixed: added `static const int _maxNeighborsPerNode = 20` inside `TopologyTracker`; the validation loop breaks after accumulating 20 valid neighbors, making the invariant explicit at the data-structure boundary.
+
+#### MESH-L2 [LOW] — Route cache unbounded and re-encodes hops O(n×m) on every topology update — `lib/core/mesh/topology_tracker.dart`
+`_invalidateRoutesFor` scanned every cached route's `List<Uint8List>` intermediate hops, calling `HexUtils.encode(hop) == nodeId` per entry — O(cache_size × max_hops) string allocation per topology update. A topology-thrashing attack saturated the GC. The route cache also had no size cap: distinct `maxHops` values for the same source/target pair created independent unbounded entries. Fixed: (1) route cache internal storage changed from `List<Uint8List>?` to `List<String>?` (hex strings stored at insertion, decoded to `Uint8List` only on cache-hit return) — `_invalidateRoutesFor` now does direct string comparison with no re-encoding; (2) `_routeCache` changed to `LinkedHashMap` capped at 500 entries with LRU eviction via `_insertRouteCache`.
+
+---
+
+### Tests Updated
+
+- **`test/core/topology_test.dart`** — Updated `identical(route1, route2)` assertion to content-equality check. Routes are decoded from stored hex on each cache hit, so `identical` no longer holds. The content (bytes per hop) is unchanged.
+- **`test/core/gossip_sync_test.dart`** — Updated `knownPacketIds` immutability test. `knownPacketIds` now returns `Iterable<String>` (a live key view with no copy allocated) instead of `Set<String>`. The old test called `.add()` on the returned set to verify immutability; the new test verifies the iterable reflects current state correctly.
+
+---
+
 ## [v4.8] — Protocol Layer Deep-Dive Audit (V6)
 **Date:** 2026-02-26
 **Branch:** `Major_Security_Fixes`
