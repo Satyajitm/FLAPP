@@ -13,17 +13,24 @@ class TopologyTracker {
   /// Maximum age for topology claims to be considered fresh for routing.
   static const Duration routeFreshnessThreshold = Duration(seconds: 60);
 
+  /// Maximum number of neighbors stored per node in the topology.
+  /// Enforcement here makes the invariant explicit at the data-structure level,
+  /// independent of the BinaryProtocol decode-side cap.
+  static const int _maxNeighborsPerNode = 20;
+
   /// Directed claims: Key claims to see Value (neighbors).
   final Map<String, Set<String>> _claims = {};
 
   /// Last time we received an update from a node.
   final Map<String, DateTime> _lastSeen = {};
 
-  /// Route cache: "$source:$target" → computed route (or null = no route).
-  /// Invalidated on any topology change. Entries older than [_routeCacheTtl]
-  /// are discarded on the next [computeRoute] call for that pair.
-  final Map<String, ({List<Uint8List>? route, DateTime cachedAt})> _routeCache = {};
+  /// Route cache: "$source:$target:$maxHops" → computed route as hex strings (or null = no route).
+  /// Intermediate hops are stored as hex strings to avoid per-invalidation re-encoding.
+  /// LRU-ordered LinkedHashMap capped at [_maxRouteCacheEntries].
+  final LinkedHashMap<String, ({List<String>? routeHex, DateTime cachedAt})>
+      _routeCache = LinkedHashMap();
   static const Duration _routeCacheTtl = Duration(seconds: 5);
+  static const int _maxRouteCacheEntries = 500;
 
   /// Update the topology with a node's self-reported neighbor list.
   void updateNeighbors({required Uint8List source, required List<Uint8List> neighbors}) {
@@ -35,6 +42,8 @@ class TopologyTracker {
       final nId = _sanitize(n);
       if (nId != null && nId != srcId) {
         validNeighbors.add(nId);
+        // Cap per-node neighbor count regardless of the caller/protocol layer.
+        if (validNeighbors.length >= _maxNeighborsPerNode) break;
       }
     }
 
@@ -86,10 +95,12 @@ class TopologyTracker {
     if (source == target) return []; // Direct connection
 
     final cacheKey = '$source:$target:$maxHops';
-    final cached = _routeCache[cacheKey];
+    // LRU: re-insert on hit to mark as recently used.
+    final cached = _routeCache.remove(cacheKey);
     if (cached != null &&
         DateTime.now().difference(cached.cachedAt) < _routeCacheTtl) {
-      return cached.route;
+      _routeCache[cacheKey] = cached; // Re-insert as most-recently-used.
+      return cached.routeHex?.map(HexUtils.decode).toList();
     }
 
     final now = DateTime.now();
@@ -130,13 +141,11 @@ class TopologyTracker {
         final nextPath = [...path, neighbor];
 
         if (neighbor == target) {
-          // Return only intermediate hops (excluding source and target)
-          final route = nextPath
-              .sublist(1, nextPath.length - 1)
-              .map((id) => HexUtils.decode(id))
-              .toList();
-          _routeCache[cacheKey] = (route: route, cachedAt: DateTime.now());
-          return route;
+          // Intermediate hops stored as hex strings — avoids per-invalidation
+          // re-encoding in _invalidateRoutesFor (O(n×m) → O(1) per entry).
+          final routeHex = nextPath.sublist(1, nextPath.length - 1);
+          _insertRouteCache(cacheKey, (routeHex: routeHex, cachedAt: DateTime.now()));
+          return routeHex.map(HexUtils.decode).toList();
         }
 
         visited.add(neighbor);
@@ -144,28 +153,39 @@ class TopologyTracker {
       }
     }
 
-    _routeCache[cacheKey] = (route: null, cachedAt: DateTime.now());
+    _insertRouteCache(cacheKey, (routeHex: null, cachedAt: DateTime.now()));
     return null; // No route found
+  }
+
+  /// Insert an entry into the route cache, evicting the LRU entry if at capacity.
+  void _insertRouteCache(
+      String key, ({List<String>? routeHex, DateTime cachedAt}) value) {
+    if (_routeCache.length >= _maxRouteCacheEntries) {
+      _routeCache.remove(_routeCache.keys.first); // Evict oldest (LRU front).
+    }
+    _routeCache[key] = value;
   }
 
   /// Invalidate only the route cache entries that involve [nodeId].
   ///
   /// Cache keys are "$source:$target:$maxHops". We remove any entry where
   /// [nodeId] appears as the source, target, or as part of the cached route.
-  /// This is cheaper than clearing the entire cache when only one node changes.
+  /// Intermediate hops are stored as hex strings so no per-entry re-encoding
+  /// is needed — O(hops) string compare instead of O(hops) encode+compare.
   void _invalidateRoutesFor(String nodeId) {
     _routeCache.removeWhere((key, value) {
-      // Key format: "source:target:maxHops"
-      final parts = key.split(':');
-      if (parts.length >= 2 && (parts[0] == nodeId || parts[1] == nodeId)) {
-        return true;
+      // Key format: "source:target:maxHops" — source is first segment.
+      final colon1 = key.indexOf(':');
+      final colon2 = colon1 >= 0 ? key.indexOf(':', colon1 + 1) : -1;
+      if (colon1 >= 0 && colon2 >= 0) {
+        if (key.substring(0, colon1) == nodeId ||
+            key.substring(colon1 + 1, colon2) == nodeId) {
+          return true;
+        }
       }
       // Also remove entries whose cached route passes through nodeId.
-      final route = value.route;
-      if (route != null) {
-        return route.any((hop) => HexUtils.encode(hop) == nodeId);
-      }
-      return false;
+      // Hops are already hex-encoded strings — no re-encoding needed.
+      return value.routeHex?.contains(nodeId) ?? false;
     });
   }
 

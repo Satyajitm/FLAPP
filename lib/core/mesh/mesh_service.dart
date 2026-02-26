@@ -47,10 +47,21 @@ class MeshService implements Transport {
 
   List<PeerConnection> _currentPeers = [];
 
+  /// Set to true in [start] and false at the very beginning of [stop].
+  /// Prevents in-flight [_maybeRelay] async calls from broadcasting after stop.
+  bool _running = false;
+
   /// Ed25519 signing public keys cached from peer connections, keyed by peer hex ID.
   /// LRU-ordered (LinkedHashMap insertion order): oldest entry is evicted when limit exceeded.
   final LinkedHashMap<String, Uint8List> _peerSigningKeys = LinkedHashMap();
   static const _maxPeerSigningKeys = 500;
+
+  /// Per-source handshake rate limiting: max 3 handshakes per sourceId per 60s.
+  /// LRU-capped at 200 entries to prevent memory exhaustion from spoofed source IDs.
+  final LinkedHashMap<String, _HandshakeRateState> _handshakeRateBySource =
+      LinkedHashMap();
+  static const _maxHandshakeRateSources = 200;
+  static const _maxHandshakesPerWindow = 3;
 
   /// M1: Packet-level deduplicator — drops packets already seen at the mesh layer.
   final MessageDeduplicator _meshDedup = MessageDeduplicator(
@@ -140,6 +151,7 @@ class MeshService implements Transport {
 
   /// Start listening for packets and peers, and begin periodic announces.
   Future<void> start() async {
+    _running = true;
     _packetSub = _rawTransport.onPacketReceived.listen(_onPacketReceived);
     _peersSub = _rawTransport.connectedPeers.listen(_onPeersChanged);
     _gossipSync.start();
@@ -164,6 +176,7 @@ class MeshService implements Transport {
 
   /// Stop all subscriptions and timers.
   Future<void> stop() async {
+    _running = false; // Set first — guards all in-flight _maybeRelay calls.
     _packetSub?.cancel();
     _packetSub = null;
     _peersSub?.cancel();
@@ -225,9 +238,6 @@ class MeshService implements Transport {
       // This is MED-C6: unverified app-layer data is not delivered to repositories.
     }
 
-    // Feed to gossip sync for gap-filling bookkeeping.
-    _gossipSync.onPacketSeen(packet);
-
     // C1: Mesh-internal packet types: update topology only from verified peers.
     // Unverified discovery/topology packets are relayed (TTL will expire)
     // but must NOT influence our topology state to prevent poisoning.
@@ -235,6 +245,8 @@ class MeshService implements Transport {
         packet.type == MessageType.topologyAnnounce) {
       if (verified) {
         _handleTopologyPacket(packet);
+        // Record verified topology packets for gossip gap-filling.
+        _gossipSync.onPacketSeen(packet);
       } else {
         SecureLogger.debug(
           'Dropping topology/discovery update from unverified peer '
@@ -244,6 +256,35 @@ class MeshService implements Transport {
       }
       _maybeRelay(packet);
       return;
+    }
+
+    // Handshake rate limiting per sourceId (MESH-M3).
+    // BleTransport rate-limits direct handshakes, but multi-hop relayed
+    // handshakes bypass that check. Apply a per-source limit here.
+    if (packet.type == MessageType.handshake) {
+      final srcKey = HexUtils.encode(packet.sourceId);
+      final now = DateTime.now();
+      // LRU cap: evict oldest when over limit.
+      if (!_handshakeRateBySource.containsKey(srcKey) &&
+          _handshakeRateBySource.length >= _maxHandshakeRateSources) {
+        _handshakeRateBySource.remove(_handshakeRateBySource.keys.first);
+      }
+      final hs = _handshakeRateBySource.putIfAbsent(
+        srcKey,
+        () => _HandshakeRateState(),
+      );
+      if (now.difference(hs.windowStart).inSeconds >= 60) {
+        hs.count = 0;
+        hs.windowStart = now;
+      }
+      if (hs.count >= _maxHandshakesPerWindow) {
+        SecureLogger.debug(
+          'Handshake rate limit exceeded for source ${srcKey.substring(0, 8)}…',
+          category: _cat,
+        );
+        return; // Drop but do not relay — limit mesh-wide handshake storm.
+      }
+      hs.count++;
     }
 
     // MED-C6: Drop application-layer packets from *directly connected* peers
@@ -267,6 +308,12 @@ class MeshService implements Transport {
         category: _cat,
       );
     }
+
+    // Feed verified (or trusted distant-peer) packets to gossip sync.
+    // Cross-module fix: gossip sync is called AFTER all drop decisions so that
+    // unverified direct-peer packets dropped above are not recorded and later
+    // re-sent to other peers via gossip responses.
+    _gossipSync.onPacketSeen(packet);
 
     // Application-layer packet: emit to feature repositories.
     _appPacketController.add(packet);
@@ -296,10 +343,18 @@ class MeshService implements Transport {
   // ---------------------------------------------------------------------------
 
   Future<void> _maybeRelay(FluxonPacket packet) async {
+    if (!_running) return; // Guard 1: stop() already called.
+
     final isMine = bytesEqual(packet.sourceId, _myPeerId);
 
+    // MESH-M3: Cap handshake relay TTL to 3 to limit mesh-wide blast radius
+    // of injected handshake packets. Normal packets use their original TTL.
+    final effectiveTTL = packet.type == MessageType.handshake
+        ? packet.ttl.clamp(0, 3)
+        : packet.ttl;
+
     final decision = RelayController.decide(
-      ttl: packet.ttl,
+      ttl: effectiveTTL,
       senderIsSelf: isMine,
       type: packet.type,
       isDirected: !packet.isBroadcast,
@@ -312,6 +367,8 @@ class MeshService implements Transport {
     if (decision.delayMs > 0) {
       await Future.delayed(Duration(milliseconds: decision.delayMs));
     }
+
+    if (!_running) return; // Guard 2: stop() was called during jitter delay.
 
     // Create relayed copy preserving original source/timestamp/signature.
     final relayed = FluxonPacket(
@@ -403,4 +460,10 @@ class MeshService implements Transport {
     await broadcastPacket(packet);
   }
 
+}
+
+/// Per-source handshake rate-limit state for [MeshService._handshakeRateBySource].
+class _HandshakeRateState {
+  int count = 0;
+  DateTime windowStart = DateTime.now();
 }

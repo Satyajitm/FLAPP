@@ -223,18 +223,16 @@ void main() {
       expect(gossip.knownPacketIds, isEmpty);
     });
 
-    test('returns a set copy (not mutable reference)', () {
+    test('returns a live view over internal keys (no copy allocated)', () {
       final packet = buildPacket(
         type: MessageType.chat,
         sourceId: makePeerId(0xBB),
       );
       gossip.onPacketSeen(packet);
 
-      final ids = gossip.knownPacketIds;
-      ids.add('fake-id');
-
-      // Internal state should not be affected
+      // knownPacketIds is an Iterable view — verify it reflects current state.
       expect(gossip.knownPacketIds, hasLength(1));
+      expect(gossip.knownPacketIds, contains(packet.packetId));
     });
   });
 

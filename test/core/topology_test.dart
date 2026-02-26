@@ -321,8 +321,11 @@ void main() {
 
         expect(route1, isNotNull);
         expect(route2, isNotNull);
-        // Same result object is returned from cache.
-        expect(identical(route1, route2), isTrue);
+        // Same content is returned from cache (decoded from stored hex each time).
+        expect(route1!.length, equals(route2!.length));
+        for (var i = 0; i < route1.length; i++) {
+          expect(route1[i], equals(route2[i]));
+        }
       });
 
       test('cache is invalidated after updateNeighbors', () {

@@ -79,7 +79,10 @@ class GossipSyncManager {
   }
 
   /// MED-8: Rate-limit tracking for gossip sync responses per peer (keyed by hex peer ID).
-  final Map<String, _SyncRateState> _syncRateByPeer = {};
+  /// LRU-ordered LinkedHashMap capped at [_maxSyncRatePeers] entries to prevent
+  /// memory exhaustion from attackers using many spoofed source IDs.
+  final LinkedHashMap<String, _SyncRateState> _syncRateByPeer = LinkedHashMap();
+  static const int _maxSyncRatePeers = 200;
 
   /// Handle a sync request from a peer.
   ///
@@ -90,11 +93,20 @@ class GossipSyncManager {
     required Uint8List fromPeerId,
     required Set<String> peerHasIds,
   }) async {
+    // Reject oversized peerHasIds sets to prevent unbounded heap allocation
+    // from a malicious peer crafting a gossip sync request with 100k+ IDs.
+    if (peerHasIds.length > config.seenCapacity * 2) return;
+
     final now = DateTime.now();
     final cutoff = now.subtract(Duration(seconds: config.maxMessageAgeSeconds));
 
     // MED-8: Enforce per-peer sync response rate limit.
     final peerKey = HexUtils.encode(fromPeerId);
+    // LRU cap: evict oldest entry when the map is full before inserting new peer.
+    if (!_syncRateByPeer.containsKey(peerKey) &&
+        _syncRateByPeer.length >= _maxSyncRatePeers) {
+      _syncRateByPeer.remove(_syncRateByPeer.keys.first);
+    }
     final rateState = _syncRateByPeer.putIfAbsent(
       peerKey, () => _SyncRateState(),
     );
@@ -124,7 +136,10 @@ class GossipSyncManager {
   }
 
   /// Build a set of packet IDs we currently have (for sync requests).
-  Set<String> get knownPacketIds => _seenPackets.keys.toSet();
+  ///
+  /// Returns an unmodifiable view over the live map keys — no copy allocated.
+  /// Callers must not hold the reference across mutations of [_seenPackets].
+  Iterable<String> get knownPacketIds => _seenPackets.keys;
 
   void _performMaintenance() {
     _cleanupExpired();
