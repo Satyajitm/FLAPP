@@ -88,21 +88,28 @@ class KeyStorage {
   ///
   /// Returns null if no key pair is stored.
   /// HIGH-C4: Tries base64 first; migrates old hex-encoded entries on first load.
+  /// M10: Wrap entire body in try/catch — corrupt storage causes a crash loop
+  /// on every startup; returning null lets the caller generate a fresh key pair.
   Future<({Uint8List privateKey, Uint8List publicKey})?> loadStaticKeyPair() async {
-    final privateRaw = await _storage.read(key: _staticPrivateKeyTag);
-    final publicRaw = await _storage.read(key: _staticPublicKeyTag);
+    try {
+      final privateRaw = await _storage.read(key: _staticPrivateKeyTag);
+      final publicRaw = await _storage.read(key: _staticPublicKeyTag);
 
-    if (privateRaw == null || publicRaw == null) return null;
+      if (privateRaw == null || publicRaw == null) return null;
 
-    final privateKey = _decodeStoredKey(privateRaw);
-    final publicKey = _decodeStoredKey(publicRaw);
+      final privateKey = _decodeStoredKey(privateRaw);
+      final publicKey = _decodeStoredKey(publicRaw);
 
-    // Migrate legacy hex keys: re-save as base64 if the stored string is hex.
-    if (!_isBase64(privateRaw) || !_isBase64(publicRaw)) {
-      await storeStaticKeyPair(privateKey: privateKey, publicKey: publicKey);
+      // Migrate legacy hex keys: re-save as base64 if the stored string is hex.
+      if (!_isBase64(privateRaw) || !_isBase64(publicRaw)) {
+        await storeStaticKeyPair(privateKey: privateKey, publicKey: publicKey);
+      }
+
+      return (privateKey: privateKey, publicKey: publicKey);
+    } catch (_) {
+      // Corrupt storage value — return null so caller generates a fresh key pair.
+      return null;
     }
-
-    return (privateKey: privateKey, publicKey: publicKey);
   }
 
   /// Returns true if [s] looks like a base64 string (no hex-only characters).

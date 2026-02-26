@@ -70,12 +70,17 @@ class ChatController extends StateNotifier<ChatState> {
   /// Restore messages saved from a previous session for the active group.
   Future<void> _loadPersistedMessages() async {
     if (_storageService == null || _groupId == null) return;
-    final saved = await _storageService.loadMessages(_groupId);
-    if (saved.isNotEmpty) {
-      final capped = saved.length > _maxInMemoryMessages
-          ? saved.sublist(saved.length - _maxInMemoryMessages)
-          : saved;
-      state = state.copyWith(messages: capped);
+    // H13: Wrap in try/catch so corrupt persisted data does not crash the controller.
+    try {
+      final saved = await _storageService.loadMessages(_groupId);
+      if (saved.isNotEmpty) {
+        final capped = saved.length > _maxInMemoryMessages
+            ? saved.sublist(saved.length - _maxInMemoryMessages)
+            : saved;
+        state = state.copyWith(messages: capped);
+      }
+    } catch (_) {
+      // Corrupt storage — start with empty message list.
     }
   }
 
@@ -157,7 +162,10 @@ class ChatController extends StateNotifier<ChatState> {
     state = state.copyWith(messages: messages);
     // Receipt status changes (delivered/read ticks) are persisted lazily —
     // the debounced MessageStorageService write is sufficient here.
-    await _storageService?.saveMessages(_groupId ?? '', state.messages);
+    // M16: Only persist if we have a valid group ID — avoid saving with '' as key.
+    if (_groupId != null) {
+      await _storageService?.saveMessages(_groupId!, state.messages);
+    }
   }
 
   /// Mark incoming messages as read and send read receipts.

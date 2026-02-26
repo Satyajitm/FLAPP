@@ -123,14 +123,21 @@ class EmergencyController extends StateNotifier<EmergencyState> {
   static const _maxAlerts = 200;
 
   void _listenForAlerts() {
-    _alertSub = _repository.onAlertReceived.listen((alert) {
-      final updated = [...state.alerts, alert];
-      state = state.copyWith(
-        alerts: updated.length > _maxAlerts
-            ? updated.sublist(updated.length - _maxAlerts)
-            : updated,
-      );
-    });
+    // H14: Add onError and cancelOnError: false to prevent unhandled stream errors.
+    _alertSub = _repository.onAlertReceived.listen(
+      (alert) {
+        final updated = [...state.alerts, alert];
+        state = state.copyWith(
+          alerts: updated.length > _maxAlerts
+              ? updated.sublist(updated.length - _maxAlerts)
+              : updated,
+        );
+      },
+      onError: (Object e) {
+        SecureLogger.warning('EmergencyController: alert stream error: $e');
+      },
+      cancelOnError: false,
+    );
   }
 
   /// Send an SOS emergency alert.

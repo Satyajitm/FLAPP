@@ -191,10 +191,13 @@ class BinaryProtocol {
   static Uint8List encodeDiscoveryPayload({
     required List<Uint8List> neighbors,
   }) {
-    final buffer = Uint8List(1 + neighbors.length * 32);
-    buffer[0] = neighbors.length;
-    for (var i = 0; i < neighbors.length; i++) {
-      buffer.setRange(1 + i * 32, 1 + (i + 1) * 32, neighbors[i]);
+    // M12: Cap neighbors at 10 to match the decode-side guard in
+    // decodeDiscoveryPayload, preventing oversized payloads.
+    final capped = neighbors.sublist(0, neighbors.length.clamp(0, 10));
+    final buffer = Uint8List(1 + capped.length * 32);
+    buffer[0] = capped.length;
+    for (var i = 0; i < capped.length; i++) {
+      buffer.setRange(1 + i * 32, 1 + (i + 1) * 32, capped[i]);
     }
     return buffer;
   }

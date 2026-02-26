@@ -140,6 +140,8 @@ class _JoinGroupScreenState extends ConsumerState<JoinGroupScreen> {
   }
 
   void _parseQrPayload(String raw) {
+    // M15: Reject QR payloads that are too long to be valid Fluxon codes.
+    if (raw.length > 256) return;
     // Expected format: fluxon:<joinCode>
     // Old format: fluxon:<joinCode>:<passphrase>  — passphrase portion is ignored.
     // The passphrase is never embedded in QR codes; it must be shared verbally.

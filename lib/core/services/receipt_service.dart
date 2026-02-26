@@ -87,6 +87,9 @@ class ReceiptService {
     required int originalTimestamp,
     required Uint8List originalSenderId,
   }) {
+    // H9: Cap the pending receipt map to prevent unbounded memory growth if
+    // many messages arrive without being flushed.
+    if (_pendingReadReceipts.length >= 500) return;
     _pendingReadReceipts[messageId] = _OriginalMessageRef(
       timestamp: originalTimestamp,
       senderId: originalSenderId,
@@ -140,7 +143,12 @@ class ReceiptService {
       payload: payload,
     );
 
-    await _transport.broadcastPacket(packet);
+    // M8: Wrap transport call in try/catch to avoid propagating BLE errors.
+    try {
+      await _transport.broadcastPacket(packet);
+    } catch (e) {
+      SecureLogger.warning('ReceiptService: broadcastPacket failed: $e');
+    }
   }
 
   Future<void> _sendReceipt({
@@ -168,14 +176,21 @@ class ReceiptService {
       payload: payload,
     );
 
-    if (destId != null) {
-      await _transport.sendPacket(packet, destId);
-    } else {
-      await _transport.broadcastPacket(packet);
+    // M8: Wrap transport calls in try/catch to avoid propagating BLE errors.
+    try {
+      if (destId != null) {
+        await _transport.sendPacket(packet, destId);
+      } else {
+        await _transport.broadcastPacket(packet);
+      }
+    } catch (e) {
+      SecureLogger.warning('ReceiptService: send/broadcastPacket failed: $e');
     }
   }
 
   void _handleIncomingReceipt(FluxonPacket packet) {
+    // M7: Validate sourceId length before constructing PeerId.
+    if (packet.sourceId.length != 32) return;
     final fromPeer = PeerId(packet.sourceId);
     if (fromPeer == _myPeerId) return; // Skip own receipts
 

@@ -154,11 +154,16 @@ class GroupManager {
   }
 
   /// Leave the current group.
-  void leaveGroup() {
+  Future<void> leaveGroup() async {
     _activeGroup = null;
     // HIGH-C2: Evict all cached derived keys from GroupCipher on leave.
     _cipher.clearCache();
-    unawaited(_groupStorage.deleteGroup());
+    // H10: Await deleteGroup() so key material is guaranteed removed from disk.
+    try {
+      await _groupStorage.deleteGroup();
+    } catch (_) {
+      // Non-fatal — in-memory group has already been cleared above.
+    }
   }
 
   /// Add a discovered member to the active group.

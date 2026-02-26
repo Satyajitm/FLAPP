@@ -137,7 +137,9 @@ class IdentityManager {
       final stored = await _secureStorage.read(key: _trustedPeersKey);
       if (stored == null || stored.isEmpty) return;
       final List<dynamic> hexList = jsonDecode(stored) as List<dynamic>;
-      for (final hex in hexList) {
+      // M13: Only iterate up to _maxTrustedPeers entries to prevent unbounded
+      // heap growth from a corrupt/crafted storage value.
+      for (final hex in hexList.take(_maxTrustedPeers)) {
         if (hex is String) {
           try {
             _trustedPeers[PeerId.fromHex(hex)] = true;

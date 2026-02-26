@@ -120,11 +120,14 @@ void main() {
     });
 
     test('decodeDiscoveryPayload rejects unrealistic neighbor counts (>10)', () {
-      // Craft a payload claiming 255 neighbors — security fix rejects this
-      final neighbors = List.generate(255, (i) => makePeerId(i & 0xFF));
-      final encoded =
-          BinaryProtocol.encodeDiscoveryPayload(neighbors: neighbors);
-      final decoded = BinaryProtocol.decodeDiscoveryPayload(encoded);
+      // M12: encodeDiscoveryPayload now caps at 10, so passing 255 neighbors
+      // results in a valid encoded payload with 10 neighbors (not rejected).
+      // To test the decode-side guard, manually craft a raw payload with count=255.
+      final rawPayload = Uint8List(1 + 255 * 32);
+      rawPayload[0] = 255; // Claim 255 neighbors
+      // Leave the rest as zeros (short payload — decode guard triggers length check)
+      final decoded = BinaryProtocol.decodeDiscoveryPayload(rawPayload);
+      // The decode-side guard: neighborCount > 10 → return null
       expect(decoded, isNull);
     });
 

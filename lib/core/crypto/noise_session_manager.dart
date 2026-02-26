@@ -115,6 +115,8 @@ class NoiseSessionManager {
     final now = DateTime.now().millisecondsSinceEpoch;
 
     // MED-3: Global handshake rate limit (max 20 per minute across all devices).
+    // L7: Check global rate limit BEFORE calling _stateFor(deviceId) so that
+    // rejected handshakes do not promote the device to MRU position in the LRU map.
     if (now - _globalHandshakeWindowStart >= 60000) {
       _globalHandshakeCount = 0;
       _globalHandshakeWindowStart = now;
@@ -307,8 +309,13 @@ class NoiseSessionManager {
   }
 
   /// Remove the session for a given device (e.g., on BLE disconnect).
+  ///
+  /// H6: Disposes any pending handshake and active session to zero ephemeral
+  /// key material when the BLE link drops.
   void removeSession(String deviceId) {
-    _peers.remove(deviceId);
+    final peer = _peers.remove(deviceId);
+    peer?.handshake?.dispose();
+    peer?.session?.dispose();
     SecureLogger.debug('[NoiseSessionManager] Removed session for $deviceId');
   }
 

@@ -201,6 +201,14 @@ class GroupCipher {
     final groupId = hash.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 
     final result = DerivedGroup(keyBytes, groupId);
+    // M14: Cap _derivationCache at 4 entries to bound memory usage.
+    if (_derivationCache.length >= 4) {
+      final oldest = _derivationCache.keys.first;
+      final evicted = _derivationCache.remove(oldest);
+      if (evicted != null) {
+        for (int i = 0; i < evicted.key.length; i++) evicted.key[i] = 0;
+      }
+    }
     _derivationCache[cacheKey] = result;
     return result;
   }
@@ -234,8 +242,13 @@ class GroupCipher {
     if (cached != null) return cached;
 
     // Cache miss — run Argon2id in a background isolate to keep UI responsive.
-    final (keyBytes, groupId) =
-        await Isolate.run(() => _deriveInIsolate((passphrase, salt)));
+    // H12: Catch isolate errors and re-throw as a typed StateError so callers
+    // get a meaningful exception rather than an opaque IsolateException.
+    final (keyBytes, groupId) = await Isolate.run(
+      () => _deriveInIsolate((passphrase, salt)),
+    ).catchError(
+      (Object e) => throw StateError('Key derivation failed: $e'),
+    );
 
     final result = DerivedGroup(keyBytes, groupId);
     _derivationCache[cacheKey] = result;

@@ -477,6 +477,10 @@ class NoiseHandshakeState {
           final staticData = Uint8List.sublistView(message, offset, offset + keyLen);
           offset += keyLen;
           final decrypted = _symmetricState.decryptAndHash(staticData);
+          // C3: Validate that the decrypted static public key is exactly 32 bytes.
+          if (decrypted.length != 32) {
+            throw const NoiseException(NoiseError.invalidPublicKey);
+          }
           remoteStaticPublic = decrypted;
         case NoiseMessageToken.ee:
           _performDH(localEphemeralPrivate!, remoteEphemeralPublic!);
@@ -528,14 +532,21 @@ class NoiseHandshakeState {
 
   void _performDH(Uint8List privateKey, Uint8List publicKey) {
     final sodium = sodiumInstance;
-    final sharedSecret = sodium.crypto.scalarmult(
-      n: SecureKey.fromList(sodium, privateKey),
-      p: publicKey,
-    );
-    final sharedBytes = sharedSecret.extractBytes();
-    _symmetricState.mixKey(sharedBytes);
-    // Zero shared secret bytes immediately after use
-    for (int i = 0; i < sharedBytes.length; i++) sharedBytes[i] = 0;
+    // H4: Wrap the private key in a SecureKey and dispose it in finally to
+    // ensure the libsodium-guarded buffer is zeroed even on exception paths.
+    final skWrapper = SecureKey.fromList(sodium, privateKey);
+    try {
+      final sharedSecret = sodium.crypto.scalarmult(
+        n: skWrapper,
+        p: publicKey,
+      );
+      final sharedBytes = sharedSecret.extractBytes();
+      _symmetricState.mixKey(sharedBytes);
+      // Zero shared secret bytes immediately after use
+      for (int i = 0; i < sharedBytes.length; i++) sharedBytes[i] = 0;
+    } finally {
+      skWrapper.dispose();
+    }
   }
 
   /// Zero all sensitive key material held in this handshake state.

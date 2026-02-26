@@ -106,4 +106,16 @@ class ChatMessage {
       status: MessageStatus.values.byName(json['status'] as String? ?? 'sent'),
     );
   }
+
+  /// H13: Null-safe variant of [fromJson] that returns null on any error.
+  ///
+  /// Use when loading persisted messages to skip individual corrupt entries
+  /// rather than crashing the entire message load.
+  static ChatMessage? tryFromJson(Map<String, dynamic> json) {
+    try {
+      return ChatMessage.fromJson(json);
+    } catch (_) {
+      return null;
+    }
+  }
 }

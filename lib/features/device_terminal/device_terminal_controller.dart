@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../shared/logger.dart';
 import 'data/device_terminal_repository.dart';
 import 'device_terminal_model.dart';
 
@@ -60,35 +61,60 @@ class DeviceTerminalController extends StateNotifier<DeviceTerminalState> {
     _listenForData();
   }
 
+  /// Maximum number of terminal messages retained in memory (C5).
+  static const _maxMessages = 500;
+
   void _listenForConnectionStatus() {
-    _statusSub = _repository.onConnectionStatusChanged.listen((status) {
-      state = state.copyWith(connectionStatus: status);
-      if (status == DeviceConnectionStatus.disconnected) {
-        state = state.copyWith(connectedDeviceName: null);
-      }
-    });
+    // L9: Add onError handler to prevent unhandled stream errors.
+    _statusSub = _repository.onConnectionStatusChanged.listen(
+      (status) {
+        state = state.copyWith(connectionStatus: status);
+        if (status == DeviceConnectionStatus.disconnected) {
+          state = state.copyWith(connectedDeviceName: null);
+        }
+      },
+      onError: (Object e) {
+        SecureLogger.warning('DeviceTerminal: connection status stream error: $e');
+      },
+      cancelOnError: false,
+    );
   }
 
   void _listenForData() {
-    _dataSub = _repository.onDataReceived.listen((data) {
-      if (_isDisposed) return;
-      final msg = TerminalMessage(
-        id: 'rx_${_messageCounter++}',
-        data: data,
-        direction: TerminalDirection.incoming,
-        timestamp: DateTime.now(),
-      );
-      state = state.copyWith(messages: [...state.messages, msg]);
-    });
+    // L9: Add onError handler to prevent unhandled stream errors.
+    _dataSub = _repository.onDataReceived.listen(
+      (data) {
+        if (_isDisposed) return;
+        final msg = TerminalMessage(
+          id: 'rx_${_messageCounter++}',
+          data: data,
+          direction: TerminalDirection.incoming,
+          timestamp: DateTime.now(),
+        );
+        // C5: Cap messages list at 500 to prevent unbounded memory growth.
+        final updated = [...state.messages, msg];
+        final capped = updated.length > _maxMessages
+            ? updated.sublist(updated.length - _maxMessages)
+            : updated;
+        state = state.copyWith(messages: capped);
+      },
+      onError: (Object e) {
+        SecureLogger.warning('DeviceTerminal: data stream error: $e');
+      },
+      cancelOnError: false,
+    );
   }
 
   /// Start scanning for Fluxon hardware devices.
   Future<void> startScan() async {
+    // L13: Cancel and null out the old subscription BEFORE starting a new scan
+    // to avoid a race where the old callback fires after the new scan starts.
+    await _scanSub?.cancel();
+    _scanSub = null;
     state = state.copyWith(
       connectionStatus: DeviceConnectionStatus.scanning,
       scanResults: [],
     );
-    _scanSub?.cancel();
     _scanSub = _repository.onScanResults.listen((devices) {
       state = state.copyWith(scanResults: devices);
     });
@@ -123,6 +149,8 @@ class DeviceTerminalController extends StateNotifier<DeviceTerminalState> {
   /// Send text as UTF-8 bytes to the device.
   Future<void> sendText(String text) async {
     if (text.isEmpty) return;
+    // L11: Reject oversized inputs before encoding.
+    if (text.length > 512) return;
     final data = Uint8List.fromList(utf8.encode(text));
     await _send(data);
   }
@@ -156,10 +184,12 @@ class DeviceTerminalController extends StateNotifier<DeviceTerminalState> {
         direction: TerminalDirection.outgoing,
         timestamp: DateTime.now(),
       );
-      state = state.copyWith(
-        messages: [...state.messages, msg],
-        isSending: false,
-      );
+      // C5: Cap messages list at 500 to prevent unbounded memory growth.
+      final updated = [...state.messages, msg];
+      final capped = updated.length > _maxMessages
+          ? updated.sublist(updated.length - _maxMessages)
+          : updated;
+      state = state.copyWith(messages: capped, isSending: false);
     } catch (_) {
       state = state.copyWith(isSending: false);
     }

@@ -46,6 +46,10 @@ class StubTransport extends Transport {
   @override
   Future<void> stopServices() async {
     _running = false;
+    // M3: Close stream controllers on stop to release resources and signal
+    // listeners that no more events will be emitted.
+    if (!_packetController.isClosed) _packetController.close();
+    if (!_peersController.isClosed) _peersController.close();
   }
 
   @override

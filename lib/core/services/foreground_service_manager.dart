@@ -70,13 +70,18 @@ class ForegroundServiceManager {
   /// Call after BLE transport has started successfully. No-op on iOS/desktop.
   static Future<void> start() async {
     if (!_isAndroid) return;
-
-    await FlutterForegroundTask.startService(
-      serviceId: 1001, // Fluxon mesh foreground service ID
-      notificationTitle: 'Fluxon Mesh Active',
-      notificationText: 'Relaying messages for your group',
-      callback: fluxonForegroundTaskCallback,
-    );
+    // L4: Wrap in try/catch — foreground service errors are non-fatal.
+    try {
+      await FlutterForegroundTask.startService(
+        serviceId: 1001, // Fluxon mesh foreground service ID
+        notificationTitle: 'Fluxon Mesh Active',
+        notificationText: 'Relaying messages for your group',
+        callback: fluxonForegroundTaskCallback,
+      );
+    } catch (e) {
+      // ignore: avoid_print
+      print('[ForegroundServiceManager] start() failed: $e');
+    }
   }
 
   /// Stop the foreground service and dismiss the notification.
@@ -84,6 +89,12 @@ class ForegroundServiceManager {
   /// Call when BLE stops or the app is being destroyed. No-op on iOS/desktop.
   static Future<void> stop() async {
     if (!_isAndroid) return;
-    await FlutterForegroundTask.stopService();
+    // L4: Wrap in try/catch — foreground service errors are non-fatal.
+    try {
+      await FlutterForegroundTask.stopService();
+    } catch (e) {
+      // ignore: avoid_print
+      print('[ForegroundServiceManager] stop() failed: $e');
+    }
   }
 }

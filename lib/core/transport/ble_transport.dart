@@ -40,6 +40,14 @@ class BleTransport extends Transport {
   /// concurrent connection attempts from overlapping scan results.
   final Set<String> _connectingDevices = {};
 
+  /// Per-device stream subscriptions for characteristic value notifications.
+  /// Stored so they can be cancelled on disconnection (C1).
+  final Map<String, StreamSubscription<List<int>>> _notifySubscriptions = {};
+
+  /// Per-device connection state stream subscriptions.
+  /// Stored so they can be cancelled on disconnection (C2).
+  final Map<String, StreamSubscription<BluetoothConnectionState>> _connStateSubs = {};
+
   /// Deduplicator to prevent processing the same packet twice (e.g. received
   /// via both central notification and peripheral write callback).
   final MessageDeduplicator _deduplicator;
@@ -166,11 +174,18 @@ class BleTransport extends Transport {
 
     _log('BLE is supported');
 
-    // Start both roles in parallel
-    await Future.wait([
-      _startPeripheral(),
-      _startCentral(),
-    ]);
+    // M4: Start both roles in parallel; on partial failure, stop everything and
+    // rethrow so the caller knows startup did not succeed.
+    try {
+      await Future.wait([
+        _startPeripheral(),
+        _startCentral(),
+      ]);
+    } catch (e) {
+      _log('ERROR during startup — rolling back: $e');
+      await stopServices();
+      rethrow;
+    }
   }
 
   @override
@@ -192,6 +207,16 @@ class BleTransport extends Transport {
     } catch (e) {
       _log('Error stopping advertising: $e');
     }
+
+    // Cancel all per-device subscriptions before disconnecting (C1, C2).
+    for (final sub in _notifySubscriptions.values) {
+      sub.cancel();
+    }
+    _notifySubscriptions.clear();
+    for (final sub in _connStateSubs.values) {
+      sub.cancel();
+    }
+    _connStateSubs.clear();
 
     // Disconnect all peers
     for (final device in _connectedDevices.values) {
@@ -332,10 +357,16 @@ class BleTransport extends Transport {
     }
 
     // Wait until the Bluetooth adapter is on before scanning.
+    // H3: Add a 30-second timeout so startServices() does not hang indefinitely
+    // if the user never enables Bluetooth.
     _log('Waiting for Bluetooth adapter...');
     await FlutterBluePlus.adapterState
         .where((s) => s == BluetoothAdapterState.on)
-        .first;
+        .first
+        .timeout(
+          const Duration(seconds: 30),
+          onTimeout: () => throw TimeoutException('Bluetooth adapter did not turn on within 30 seconds'),
+        );
     _log('Bluetooth adapter is ON');
     
     _startScanning();
@@ -345,27 +376,34 @@ class BleTransport extends Transport {
     _log('Starting scan (unfiltered — will check service after connect)...');
 
     // Subscribe once to scan results — reused across active/idle mode switches.
-    _scanSubscription = FlutterBluePlus.scanResults.listen((results) {
-      for (final result in results) {
-        // Only consider devices advertising our service UUID **or**
-        // devices whose local name is "Fluxon" (fallback when Android
-        // strips the service UUID from the advertisement).
-        // NOTE: The name match is used only as a discovery hint to attempt a
-        // connection. It confers NO authentication or elevated trust — actual
-        // authentication is performed via the Noise XX handshake after connection,
-        // and GATT service UUID verification happens before any data exchange.
-        final hasService = result.advertisementData.serviceUuids
-            .any((u) => u == serviceUuid);
-        final hasName =
-            result.device.platformName.toLowerCase().contains('fluxon') ||
-            (result.advertisementData.advName.toLowerCase().contains('fluxon'));
+    // H1: Add onError callback to avoid unhandled stream errors crashing the app.
+    _scanSubscription = FlutterBluePlus.scanResults.listen(
+      (results) {
+        for (final result in results) {
+          // Only consider devices advertising our service UUID **or**
+          // devices whose local name is "Fluxon" (fallback when Android
+          // strips the service UUID from the advertisement).
+          // NOTE: The name match is used only as a discovery hint to attempt a
+          // connection. It confers NO authentication or elevated trust — actual
+          // authentication is performed via the Noise XX handshake after connection,
+          // and GATT service UUID verification happens before any data exchange.
+          final hasService = result.advertisementData.serviceUuids
+              .any((u) => u == serviceUuid);
+          final hasName =
+              result.device.platformName.toLowerCase().contains('fluxon') ||
+              (result.advertisementData.advName.toLowerCase().contains('fluxon'));
 
-        if (hasService || hasName) {
-          _log('Found candidate device (rssi=${result.rssi}, hasService=$hasService, hasName=$hasName)');
-          _handleDiscoveredDevice(result);
+          if (hasService || hasName) {
+            _log('Found candidate device (rssi=${result.rssi}, hasService=$hasService, hasName=$hasName)');
+            _handleDiscoveredDevice(result);
+          }
         }
-      }
-    });
+      },
+      onError: (Object e) {
+        SecureLogger.warning('BLE scan stream error: $e', category: 'BLE');
+      },
+      cancelOnError: false,
+    );
 
     // Start in active mode.
     _enterActiveMode();
@@ -502,8 +540,17 @@ class BleTransport extends Transport {
 
       _log('Found characteristic, subscribing to notifications...');
       _peerCharacteristics[deviceId] = char;
-      await char.setNotifyValue(true);
-      char.onValueReceived.listen((data) {
+      try {
+        await char.setNotifyValue(true);
+      } catch (e) {
+        // M2: setNotifyValue failed — disconnect cleanly to avoid stale state.
+        _log('ERROR: setNotifyValue failed for $deviceId — disconnecting: $e');
+        try { await result.device.disconnect(); } catch (_) {}
+        return; // _connectingDevices removed in finally
+      }
+
+      // C1: Store the subscription so it can be cancelled on disconnection.
+      _notifySubscriptions[deviceId] = char.onValueReceived.listen((data) {
         _handleIncomingData(Uint8List.fromList(data), fromDeviceId: deviceId);
       });
 
@@ -516,8 +563,13 @@ class BleTransport extends Transport {
       // Initiate Noise handshake as central (initiator)
       _initiateNoiseHandshake(deviceId);
 
-      result.device.connectionState.listen((state) {
+      // C2: Store the connection state subscription so it can be cancelled.
+      final connStateSub = result.device.connectionState.listen((state) {
         if (state == BluetoothConnectionState.disconnected) {
+          // Cancel per-device subscriptions on disconnect (C1, C2).
+          _notifySubscriptions.remove(deviceId)?.cancel();
+          _connStateSubs.remove(deviceId)?.cancel();
+
           _noiseSessionManager.removeSession(deviceId);
 
           // Clean up device-to-peer ID mappings
@@ -538,6 +590,7 @@ class BleTransport extends Transport {
           _emitPeerUpdate();
         }
       });
+      _connStateSubs[deviceId] = connStateSub;
     } catch (e) {
       _log('ERROR connecting: $e');
     } finally {
@@ -693,6 +746,11 @@ class BleTransport extends Transport {
           // skip rather than send plaintext.
           return;
         }
+        // L2: NOTE — ble_peripheral's updateCharacteristic broadcasts to ALL
+        // subscribed GATT clients, not just the intended recipient. There is no
+        // per-client notification API exposed by the ble_peripheral package.
+        // Encryption (applied above) mitigates the confidentiality risk since
+        // each client has a different session key and cannot decrypt others' data.
         await ble_p.BlePeripheral.updateCharacteristic(
           characteristicId: packetCharUuidStr,
           value: sendData,
@@ -713,9 +771,10 @@ class BleTransport extends Transport {
     Uint8List data, {
     required String fromDeviceId,
   }) async {
-    // H7: Reject data outside valid size range before any processing.
-    if (data.isEmpty || data.length > 4096) {
-      _log('Rejecting oversized data from device — dropping');
+    // M1/H7: Reject data outside valid size range before any processing.
+    // Minimum valid Fluxon packet is 78 bytes (header only, no payload, no sig).
+    if (data.length < 78 || data.length > 4096) {
+      _log('Rejecting data with invalid size (${data.length} bytes) from device — dropping');
       return;
     }
 
@@ -818,6 +877,8 @@ class BleTransport extends Transport {
     }
 
     // C3: Verify Ed25519 signature on non-handshake packets.
+    // L1: If the packet carries a signature but we have no cached signing key,
+    // drop it rather than passing it through unverified.
     if (packet.signature != null) {
       final peerSigningKey = _noiseSessionManager.getSigningPublicKey(fromDeviceId);
       if (peerSigningKey != null) {
@@ -829,6 +890,14 @@ class BleTransport extends Transport {
           );
           return;
         }
+      } else {
+        // L1: Signing key not yet cached (handshake may have completed on another
+        // code path). Drop the packet instead of delivering it unverified.
+        SecureLogger.warning(
+          'Signed packet from $fromDeviceId but no signing key cached — dropping',
+          category: 'BLE',
+        );
+        return;
       }
     }
 
@@ -885,11 +954,26 @@ class BleTransport extends Transport {
       final remotePeerIdHex = HexUtils.encode(remotePeerIdBytes);
 
       _deviceToPeerHex[fromDeviceId] = remotePeerIdHex;
-      _peerHexToDevice[remotePeerIdHex] = fromDeviceId;
+      // M5: Only write to _peerHexToDevice if key is absent or already maps
+      // to this same device. Prevents a second device from hijacking an
+      // existing peer-hex→device mapping after a reconnect with a different BLE ID.
+      final existingDevice = _peerHexToDevice[remotePeerIdHex];
+      if (existingDevice == null || existingDevice == fromDeviceId) {
+        _peerHexToDevice[remotePeerIdHex] = fromDeviceId;
+      }
 
       // CRIT-1: Mark this device as an authenticated peripheral client so it
       // can receive encrypted GATT notifications.
+      // H2: Enforce cap on authenticated peripheral clients to prevent unbounded growth.
       _authenticatedPeripheralClients.add(fromDeviceId);
+      if (_authenticatedPeripheralClients.length > config.maxConnections) {
+        final oldest = _authenticatedPeripheralClients.first;
+        _authenticatedPeripheralClients.remove(oldest);
+        SecureLogger.warning(
+          'Authenticated peripheral clients cap reached — evicted oldest',
+          category: 'BLE',
+        );
+      }
 
       // Update the peer connection with the real peer ID and signing key
       final existingConnection = _peerConnections[fromDeviceId] ??

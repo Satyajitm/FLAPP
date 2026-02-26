@@ -38,27 +38,42 @@ abstract class PermissionService {
 class GeolocatorGpsService implements GpsService {
   @override
   Future<GpsPosition> getCurrentPosition() async {
-    final position = await Geolocator.getCurrentPosition(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.high,
-      ),
-    );
-    return GpsPosition(
-      latitude: position.latitude,
-      longitude: position.longitude,
-      accuracy: position.accuracy,
-      altitude: position.altitude,
-      speed: position.speed,
-      heading: position.heading,
-    );
+    // H11: Wrap in try/catch and rethrow as a typed exception so callers
+    // (LocationController) can handle GPS unavailability gracefully.
+    try {
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+        ),
+      );
+      return GpsPosition(
+        latitude: position.latitude,
+        longitude: position.longitude,
+        accuracy: position.accuracy,
+        altitude: position.altitude,
+        speed: position.speed,
+        heading: position.heading,
+      );
+    } catch (e) {
+      throw LocationServiceException('Failed to get current position: $e');
+    }
   }
+}
+
+/// Typed exception for GPS service errors (H11).
+class LocationServiceException implements Exception {
+  final String message;
+  const LocationServiceException(this.message);
+
+  @override
+  String toString() => 'LocationServiceException: $message';
 }
 
 /// Concrete [PermissionService] backed by the Geolocator plugin.
 class GeolocatorPermissionService implements PermissionService {
   @override
   Future<bool> ensureLocationPermission() async {
-    final permission = await Geolocator.checkPermission();
+    var permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
       final requested = await Geolocator.requestPermission();
       if (requested == LocationPermission.denied ||
@@ -69,6 +84,10 @@ class GeolocatorPermissionService implements PermissionService {
     if (permission == LocationPermission.deniedForever) {
       return false;
     }
-    return true;
+    // L5: Re-check the current permission state rather than relying on the
+    // cached value from before the requestPermission() call.
+    permission = await Geolocator.checkPermission();
+    return permission == LocationPermission.always ||
+        permission == LocationPermission.whileInUse;
   }
 }

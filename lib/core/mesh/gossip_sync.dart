@@ -130,8 +130,14 @@ class GossipSyncManager {
       rateState.count++;
 
       // Send missing packet to the requesting peer
+      // H5: Wrap in try/catch so a single failed send does not abort the loop.
       final packet = entry.value.packet.withDecrementedTTL();
-      await _transport.sendPacket(packet, fromPeerId);
+      try {
+        await _transport.sendPacket(packet, fromPeerId);
+      } catch (e) {
+        // Transport error — abort this sync round for the peer.
+        break;
+      }
     }
   }
 

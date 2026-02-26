@@ -11,8 +11,11 @@ class PeerId {
   /// Cached hash code — computed once at construction time.
   final int _hashCode;
 
-  PeerId(this.bytes)
-      : assert(bytes.length == 32),
+  PeerId(Uint8List bytes)
+      : bytes = bytes.length == 32
+            ? bytes
+            // L6: Throw ArgumentError in release builds (assert is stripped).
+            : throw ArgumentError('PeerId requires exactly 32 bytes, got ${bytes.length}'),
         // LOW-N3: Use the first 4 bytes of the peer ID as the hash code instead
         // of Object.hashAll, which produces a weak 32-bit hash with birthday
         // collisions around 65k entries. Since peer IDs are already cryptographic

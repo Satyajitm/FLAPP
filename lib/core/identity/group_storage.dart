@@ -67,12 +67,19 @@ class GroupStorage {
       return null;
     }
 
+    final groupKey = _decodeBytes(keyStr);
+    final salt = _decodeBytes(saltStr);
+
+    // M11: If decoding fails (corrupt data), return null rather than crashing.
+    if (groupKey == null || salt == null) return null;
+
     return (
-      groupKey: _decodeBytes(keyStr),
+      groupKey: groupKey,
       groupId: groupId,
       name: name,
-      createdAt: DateTime.parse(createdAtStr),
-      salt: _decodeBytes(saltStr),
+      // C7: Use tryParse to avoid an uncaught FormatException on corrupt data.
+      createdAt: DateTime.tryParse(createdAtStr) ?? DateTime.now(),
+      salt: salt,
     );
   }
 
@@ -93,7 +100,7 @@ class GroupStorage {
   ///
   /// MED-N3: Provides backward compatibility with devices that stored keys
   /// as hex before the migration to base64.
-  static Uint8List _decodeBytes(String s) {
+  static Uint8List? _decodeBytes(String s) {
     // A pure hex string contains only [0-9a-fA-F] and has even length.
     if (s.isNotEmpty && s.length.isEven && RegExp(r'^[0-9a-fA-F]+$').hasMatch(s)) {
       return Uint8List.fromList(
@@ -103,6 +110,12 @@ class GroupStorage {
         ),
       );
     }
-    return base64Decode(s);
+    // M11: Wrap base64Decode in try/on to avoid uncaught FormatException on
+    // corrupt storage values.
+    try {
+      return base64Decode(s);
+    } on FormatException {
+      return null;
+    }
   }
 }

@@ -174,8 +174,11 @@ class MessageStorageService {
         final contents = utf8.decode(decrypted);
         if (contents.trim().isEmpty) return [];
         final List<dynamic> jsonList = jsonDecode(contents) as List<dynamic>;
+        // H8: Guard against unbounded deserialization from corrupt/crafted files.
+        if (jsonList.length > 10000) return [];
         return jsonList
-            .map((e) => ChatMessage.fromJson(e as Map<String, dynamic>))
+            .map((e) => ChatMessage.tryFromJson(e as Map<String, dynamic>))
+            .whereType<ChatMessage>()
             .toList();
       }
 
@@ -185,8 +188,11 @@ class MessageStorageService {
         final contents = utf8.decode(fileBytes);
         if (contents.trim().isEmpty) return [];
         final List<dynamic> jsonList = jsonDecode(contents) as List<dynamic>;
+        // H8: Guard against unbounded deserialization.
+        if (jsonList.length > 10000) return [];
         final messages = jsonList
-            .map((e) => ChatMessage.fromJson(e as Map<String, dynamic>))
+            .map((e) => ChatMessage.tryFromJson(e as Map<String, dynamic>))
+            .whereType<ChatMessage>()
             .toList();
         // Re-save with encryption so legacy files are migrated transparently.
         await _writeEncrypted(groupId, messages);
@@ -235,12 +241,18 @@ class MessageStorageService {
   }
 
   /// Encrypt and write [messages] for [groupId] to disk.
+  ///
+  /// M6: Uses a write-to-temp-then-rename strategy so that a crash during
+  /// the write does not corrupt the existing file. File.rename() is atomic
+  /// on the same filesystem (Android/iOS app documents directory).
   Future<void> _writeEncrypted(String groupId, List<ChatMessage> messages) async {
     final file = await getFileForGroup(groupId);
+    final tmpFile = File('${file.path}.tmp');
     final jsonList = messages.map((m) => m.toJson()).toList();
     final plaintext = Uint8List.fromList(utf8.encode(jsonEncode(jsonList)));
     final encrypted = await encryptData(plaintext);
-    await file.writeAsBytes(encrypted, flush: true);
+    await tmpFile.writeAsBytes(encrypted, flush: true);
+    await tmpFile.rename(file.path);
   }
 
   /// Delete a single message by its [id] and re-save.

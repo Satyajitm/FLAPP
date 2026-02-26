@@ -124,8 +124,19 @@ class MeshService implements Transport {
     try {
       final sig = Signatures.sign(packet.encode(), _identityManager.signingPrivateKey);
       outgoing = packet.withSignature(sig);
-    } catch (_) {
-      // Sodium not available (test / desktop) — send unsigned.
+    } on UnsupportedError {
+      // H7: Sodium not available on desktop/test — send unsigned (acceptable in
+      // test environments; never happens on production Android/iOS).
+    } on Error {
+      // H7: LateInitializationError (sodium not yet initialised in test/desktop)
+      // — send unsigned. Non-Exception Errors from libsodium are treated the
+      // same as UnsupportedError here; a real signing failure on device would
+      // surface as an Exception, not an Error.
+    } catch (e) {
+      // H7: Unexpected exception during signing — log and do NOT send the packet
+      // to avoid leaking unsigned production data.
+      SecureLogger.warning('MeshService: signing failed for sendPacket: $e', category: _cat);
+      return false;
     }
     return _rawTransport.sendPacket(outgoing, peerId);
   }
@@ -136,8 +147,15 @@ class MeshService implements Transport {
     try {
       final sig = Signatures.sign(packet.encode(), _identityManager.signingPrivateKey);
       outgoing = packet.withSignature(sig);
-    } catch (_) {
-      // Sodium not available (test / desktop) — broadcast unsigned.
+    } on UnsupportedError {
+      // H7: Sodium not available on desktop/test — broadcast unsigned.
+    } on Error {
+      // H7: LateInitializationError (sodium not yet initialised in test/desktop)
+      // — broadcast unsigned.
+    } catch (e) {
+      // H7: Unexpected exception during signing — log and do NOT broadcast.
+      SecureLogger.warning('MeshService: signing failed for broadcastPacket: $e', category: _cat);
+      return;
     }
     await _rawTransport.broadcastPacket(outgoing);
   }
@@ -152,8 +170,21 @@ class MeshService implements Transport {
   /// Start listening for packets and peers, and begin periodic announces.
   Future<void> start() async {
     _running = true;
-    _packetSub = _rawTransport.onPacketReceived.listen(_onPacketReceived);
-    _peersSub = _rawTransport.connectedPeers.listen(_onPeersChanged);
+    // C4: Add onError handlers so stream errors don't terminate the subscription.
+    _packetSub = _rawTransport.onPacketReceived.listen(
+      _onPacketReceived,
+      onError: (Object e) {
+        SecureLogger.warning('MeshService: packet stream error: $e', category: _cat);
+      },
+      cancelOnError: false,
+    );
+    _peersSub = _rawTransport.connectedPeers.listen(
+      _onPeersChanged,
+      onError: (Object e) {
+        SecureLogger.warning('MeshService: peers stream error: $e', category: _cat);
+      },
+      cancelOnError: false,
+    );
     _gossipSync.start();
 
     // Periodic topology announce (every 45 seconds).
@@ -383,7 +414,13 @@ class MeshService implements Transport {
           packet.signature != null ? Uint8List.fromList(packet.signature!) : null,
     );
 
-    await _rawTransport.broadcastPacket(relayed);
+    // M9: Wrap broadcast in try/catch so relay errors do not propagate.
+    try {
+      await _rawTransport.broadcastPacket(relayed);
+    } catch (e) {
+      SecureLogger.warning('MeshService: relay broadcast failed: $e', category: _cat);
+      return;
+    }
 
     SecureLogger.debug(
       'Relayed ${packet.type.name} TTL ${packet.ttl}→${decision.newTTL} '

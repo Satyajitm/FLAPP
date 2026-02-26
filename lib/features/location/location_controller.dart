@@ -63,11 +63,18 @@ class LocationController extends StateNotifier<LocationState> {
   }
 
   void _listenForLocationUpdates() {
-    _locationSub = _repository.onLocationReceived.listen((update) {
-      state = state.copyWith(
-        memberLocations: {...state.memberLocations, update.peerId: update},
-      );
-    });
+    // L8: Add onError handler to prevent unhandled stream errors.
+    _locationSub = _repository.onLocationReceived.listen(
+      (update) {
+        state = state.copyWith(
+          memberLocations: {...state.memberLocations, update.peerId: update},
+        );
+      },
+      onError: (Object e) {
+        // Location stream errors are non-fatal; log and continue.
+      },
+      cancelOnError: false,
+    );
   }
 
   /// Start broadcasting our location periodically.

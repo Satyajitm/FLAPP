@@ -78,6 +78,8 @@ class BleDeviceTerminalRepository implements DeviceTerminalRepository {
     _scanSub = null;
   }
 
+  bool _disposed = false;
+
   @override
   Future<void> connect(String deviceId) async {
     await stopScan();
@@ -87,8 +89,19 @@ class BleDeviceTerminalRepository implements DeviceTerminalRepository {
       final device = BluetoothDevice.fromId(deviceId);
       await device.connect(timeout: const Duration(seconds: 10));
 
+      // L10: Guard against disposal that may have occurred during the async connect.
+      if (_disposed) {
+        try { await device.disconnect(); } catch (_) {}
+        return;
+      }
+
       // Negotiate larger MTU for bigger payloads.
+      // L10: Guard against disposal that may have occurred during MTU negotiation.
       await device.requestMtu(512);
+      if (_disposed) {
+        try { await device.disconnect(); } catch (_) {}
+        return;
+      }
 
       // Discover GATT services and find our characteristics.
       final services = await device.discoverServices();
@@ -153,6 +166,10 @@ class BleDeviceTerminalRepository implements DeviceTerminalRepository {
 
   @override
   Future<void> send(Uint8List data) async {
+    // C6: Reject payloads that exceed BLE MTU to prevent silent truncation.
+    if (data.length > 512) {
+      throw ArgumentError('Payload exceeds BLE MTU (512 bytes)');
+    }
     final char = _txCharacteristic;
     if (char == null) return;
     await char.write(data.toList(), withoutResponse: false);
@@ -171,6 +188,7 @@ class BleDeviceTerminalRepository implements DeviceTerminalRepository {
 
   @override
   void dispose() {
+    _disposed = true;
     _cleanup();
     _scanController.close();
     _dataController.close();

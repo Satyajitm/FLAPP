@@ -52,6 +52,10 @@ class _CreateGroupScreenState extends ConsumerState<CreateGroupScreen> {
       if (!mounted) return;
       ref.read(activeGroupProvider.notifier).state = group;
 
+      // L12: Reset _isCreating on success so the button is re-enabled if the
+      // user navigates back from the share screen.
+      setState(() => _isCreating = false);
+
       // Navigate to the share screen so the creator can share the join code.
       // The passphrase is intentionally NOT passed — it must be shared verbally.
       Navigator.of(context).push(

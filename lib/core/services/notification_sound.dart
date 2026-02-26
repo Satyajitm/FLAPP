@@ -13,6 +13,10 @@ class NotificationSoundService {
   final AudioPlayer _player = AudioPlayer();
   String? _cachedPath;
 
+  /// L3: In-flight guard — prevents concurrent calls to [_ensureToneFile] from
+  /// both racing to write the WAV file and returning different paths.
+  Future<String>? _inFlightEnsure;
+
   /// Play the notification sound. Generates the tone file on first call.
   Future<void> play() async {
     try {
@@ -23,7 +27,17 @@ class NotificationSoundService {
     }
   }
 
-  Future<String> _ensureToneFile() async {
+  Future<String> _ensureToneFile() {
+    // L3: Reuse any in-flight future so concurrent calls don't race on the file.
+    if (_cachedPath != null && File(_cachedPath!).existsSync()) {
+      return Future.value(_cachedPath!);
+    }
+    return _inFlightEnsure ??= _doEnsureToneFile().whenComplete(() {
+      _inFlightEnsure = null;
+    });
+  }
+
+  Future<String> _doEnsureToneFile() async {
     if (_cachedPath != null && File(_cachedPath!).existsSync()) {
       return _cachedPath!;
     }
